@@ -1,0 +1,2 @@
+# elliot
+simple coding agent
