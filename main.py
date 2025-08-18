@@ -27,10 +27,8 @@ def understand_problem(state: InputState):
             "Output format (use short bullets, no markdown headers):\n"
             "- Summary: one sentence summary.\n"
             "- Goals: 2-5 concrete goals.\n"
-            "- Constraints: tech, env, performance, security, or deadlines.\n"
             "- Assumptions: any inferred context.\n"
-            "- Risks/Unknowns: questions to resolve.\n"
-            "- Next Steps: 3-6 actionable steps.\n\n"
+            "- Risks/Unknowns: questions to resolve.\n\n"
             f"Issue: {state['problem']}"
         )
     )
