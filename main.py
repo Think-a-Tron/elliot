@@ -1,11 +1,11 @@
-from typing import TypedDict
 from os import environ
+from typing import TypedDict
 
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
 model = ChatOpenAI(
-    model=environ.get("MODEL_NAME", "gpt-oss-120b"),
+    model=environ.get("MODEL_NAME", "openai/gpt-oss-120b"),
     base_url=environ.get("BASE_URL", "https://openrouter.ai/api/v1"),
 )
 
@@ -25,14 +25,14 @@ def understand_problem(state: InputState):
             "You are a senior engineer helping clarify a coding task.\n"
             "Understand and expand the given issue and produce a concise, structured brief.\n\n"
             "Output format (use short bullets, no markdown headers):\n"
-            "- Summary: one sentence summary.\n"
+            "- Restatement: rewrite the problem in your own words.\n"
             "- Goals: 2-5 concrete goals.\n"
             "- Assumptions: any inferred context.\n"
             "- Risks/Unknowns: questions to resolve.\n\n"
             f"Issue: {state['problem']}"
         )
     )
-    return {"problem_understanding": str(response.content)}
+    return {"problem_understanding": response.text()}
 
 
 def checkout_branch(state: InputState):
@@ -48,7 +48,7 @@ def checkout_branch(state: InputState):
             f"Issue: {state['problem']}"
         )
     )
-    return {"checkout_branch": str(response.content)}
+    return {"checkout_branch": response.text()}
 
 
 builder = StateGraph(State, input_schema=InputState)
@@ -56,8 +56,8 @@ builder.add_node("understand_problem", understand_problem)
 builder.add_node("checkout_branch", checkout_branch)
 
 builder.add_edge(START, "understand_problem")
-builder.add_edge(START, "checkout")
-builder.add_edge("checkout", END)
+builder.add_edge(START, "checkout_branch")
+builder.add_edge("checkout_branch", END)
 builder.add_edge("understand_problem", END)
 
 graph = builder.compile()
