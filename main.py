@@ -1,63 +1,93 @@
+import argparse
 from os import environ
 from typing import TypedDict
+from pathlib import Path
 
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
+from openai import OpenAI
+from rich import print
+from rich.panel import Panel
+from rich.markdown import Markdown
 
-model = ChatOpenAI(
-    model=environ.get("MODEL_NAME", "openai/gpt-oss-120b"),
-    base_url=environ.get("BASE_URL", "https://openrouter.ai/api/v1"),
-)
+MODEL_NAME = environ.get("MODEL_NAME", "openai/gpt-oss-120b")
+BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1")
+
+client = OpenAI(base_url=BASE_URL)
 
 
 class InputState(TypedDict):
-    problem: str
+    issue: str
+    repo_path: str
 
 
 class State(TypedDict):
-    checkout_branch: str
-    problem_understanding: str
+    understanding: str
 
 
-def understand_problem(state: InputState):
-    response = model.invoke(
-        (
-            "You are a senior engineer helping clarify a coding task.\n"
-            "Understand and expand the given issue and produce a concise, structured brief.\n\n"
-            "Output format (use short bullets, no markdown headers):\n"
-            "- Restatement: rewrite the problem in your own words.\n"
-            "- Goals: 2-5 concrete goals.\n"
-            "- Assumptions: any inferred context.\n"
-            "- Risks/Unknowns: questions to resolve.\n\n"
-            f"Issue: {state['problem']}"
+def create_understanding(state: InputState):
+    completion = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
+You are analyzing a GitHub issue.
+
+Issue:
+{state["issue"]}
+
+Task:
+Create a clear, minimal but complete understanding of the issue.
+Include:
+- Restate the issue in plain terms (what it is really about).
+- Clarify its type (bug, feature request, question, refactor, docs, etc.).
+- Expand briefly on the implications or motivation behind it.
+- If examples or code are given, explain what they show.
+- List what is clear and what is missing/ambiguous.
+- Describe what “solved” or "completed" would look like (the problem or request is precise and unambiguous).
+
+Do not propose fixes or plans.
+Keep it concise and technical, but make sure no important detail is lost.""",
+            }
+        ],
+    )
+
+    understanding = str(completion.choices[0].message.content)
+    total_tokens = completion.usage.total_tokens if completion.usage else 0
+
+    print(
+        Panel(
+            Markdown(understanding),
+            title="Understanding",
+            subtitle=f"Tokens {total_tokens}",
+            border_style="blue",
         )
     )
-    return {"problem_understanding": response.text()}
 
-
-def checkout_branch(state: InputState):
-    response = model.invoke(
-        (
-            "Generate a Git branch name for addressing this issue.\n"
-            "Rules:\n"
-            "- Use a suitable prefix: fix/, feat/, chore/, docs/, or refactor/.\n"
-            "- Use lowercase kebab-case words (a-z, 0-9, -).\n"
-            "- 3-6 short words that capture the task.\n"
-            "- Max 40 characters total.\n"
-            "- Return ONLY the branch name (no quotes, code fences, or extra text).\n\n"
-            f"Issue: {state['problem']}"
-        )
-    )
-    return {"checkout_branch": response.text()}
+    return {"understanding": completion.choices[0].message.content}
 
 
 builder = StateGraph(State, input_schema=InputState)
-builder.add_node("understand_problem", understand_problem)
-builder.add_node("checkout_branch", checkout_branch)
+builder.add_node(create_understanding)
 
-builder.add_edge(START, "understand_problem")
-builder.add_edge(START, "checkout_branch")
-builder.add_edge("checkout_branch", END)
-builder.add_edge("understand_problem", END)
+builder.add_edge(START, "create_understanding")
+builder.add_edge("create_understanding", END)
 
 graph = builder.compile()
+graph.get_graph().draw_mermaid_png()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="`elliot` a Simple Coder")
+    parser.add_argument("issue_file", type=str, help="Issue File")
+    parser.add_argument("--repo", type=Path, default=Path("."), help="Path to Repo")
+    args = parser.parse_args()
+
+    with open(args.issue_file) as file:
+        issue = file.read()
+
+    graph.invoke({"issue": issue, "repo_path": str(args.repo.resolve())})
+
+
+if __name__ == "__main__":
+    main()

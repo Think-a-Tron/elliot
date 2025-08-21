@@ -1,10 +1,14 @@
 [project]
 name = "elliot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Simple Coding Agent"
+authors = [
+    { "name" = "ExpressGradient", "email" = "johndoeknown@protonmail.com" },
+]
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "langchain[openai]>=0.3.27",
-    "langgraph>=0.6.5",
+    "langgraph>=0.6.6",
+    "openai>=1.100.0",
+    "rich>=14.1.0",
 ]
