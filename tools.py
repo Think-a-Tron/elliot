@@ -5,28 +5,23 @@ ripgrep_spec: ChatCompletionToolParam = {
     "type": "function",
     "function": {
         "name": "ripgrep",
-        "description": "Search for patterns in files using ripgrep.",
+        "description": "Search for patterns in files using ripgrep",
         "parameters": {
             "type": "object",
             "required": ["pattern"],
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Regex or string to search for.",
+                    "description": "Regex or string to search for",
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file path to search.",
+                    "description": "Directory or file path to search",
                 },
-                "file_types": {
+                "extensions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "File type filters, e.g. ['py', 'js']; passed as -t",
-                },
-                "exclude_types": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "File types to exclude, e.g. ['md']; passed as -T",
+                    "description": "File extensions to include e.g. ['py', 'js']; passed as -t",
                 },
                 "glob": {
                     "type": "array",
@@ -43,15 +38,51 @@ ripgrep_spec: ChatCompletionToolParam = {
                     "description": "Only match whole words; passed as -w",
                     "default": False,
                 },
-                "line_number": {
-                    "type": "boolean",
-                    "description": "Show line numbers in results; passed as -n",
-                    "default": True,
-                },
                 "context": {
                     "type": "integer",
                     "description": "Show NUM lines of context around matches; passed as -C NUM",
                     "default": 0,
+                },
+            },
+        },
+    },
+}
+
+fd_spec: ChatCompletionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "fd",
+        "description": "List files and directories with fd (fast find)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex or glob to match file names. Leave empty to list everything",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory to search in, defaults to current directory",
+                    "default": ".",
+                },
+                "extensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Match by file extension e.g. ['.py', '.js']",
+                },
+                "type": {
+                    "type": "string",
+                    "enum": ["file", "directory"],
+                    "description": "Restrict results to files or directories",
+                },
+                "hidden": {
+                    "type": "boolean",
+                    "description": "Include hidden files and directories",
+                    "default": False,
+                },
+                "max_depth": {
+                    "type": "integer",
+                    "description": "Limit directory recursion depth",
                 },
             },
         },
