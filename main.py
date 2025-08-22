@@ -1,13 +1,15 @@
 import argparse
 from os import environ
-from typing import TypedDict
 from pathlib import Path
+from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 from rich import print
-from rich.panel import Panel
 from rich.markdown import Markdown
+from rich.panel import Panel
+
+from tools import ripgrep_spec
 
 MODEL_NAME = environ.get("MODEL_NAME", "openai/gpt-oss-120b")
 BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1")
@@ -67,6 +69,14 @@ Keep it concise and technical, but make sure no important detail is lost.""",
     return {"understanding": completion.choices[0].message.content}
 
 
+def create_code_scan_actions(state: State):
+    client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": ""}],
+        tools=[ripgrep_spec],
+    )
+
+
 builder = StateGraph(State, input_schema=InputState)
 builder.add_node(create_understanding)
 
@@ -74,7 +84,6 @@ builder.add_edge(START, "create_understanding")
 builder.add_edge("create_understanding", END)
 
 graph = builder.compile()
-graph.get_graph().draw_mermaid_png()
 
 
 def main():
