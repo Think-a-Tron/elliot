@@ -1,10 +1,12 @@
+import os
+import subprocess
+
 from openai.types.chat import ChatCompletionToolParam
 
-
-ripgrep_spec: ChatCompletionToolParam = {
+rg_spec: ChatCompletionToolParam = {
     "type": "function",
     "function": {
-        "name": "ripgrep",
+        "name": "rg",
         "description": "Search for patterns in files using ripgrep",
         "parameters": {
             "type": "object",
@@ -18,10 +20,10 @@ ripgrep_spec: ChatCompletionToolParam = {
                     "type": "string",
                     "description": "Directory or file path to search",
                 },
-                "extensions": {
+                "file_types": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "File extensions to include e.g. ['py', 'js']; passed as -t",
+                    "description": "File types to include e.g. ['rust', 'py']; passed as -t",
                 },
                 "glob": {
                     "type": "array",
@@ -68,7 +70,7 @@ fd_spec: ChatCompletionToolParam = {
                 "extensions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Match by file extension e.g. ['.py', '.js']",
+                    "description": "Match by file extension e.g. ['py', 'js']",
                 },
                 "type": {
                     "type": "string",
@@ -88,3 +90,86 @@ fd_spec: ChatCompletionToolParam = {
         },
     },
 }
+
+
+def rg(args: dict, root: str) -> str:
+    abs_root = os.path.abspath(root)
+
+    cmd = ["rg", "--color", "never", "--line-number"]
+
+    if args.get("ignore_case", False):
+        cmd.append("-i")
+
+    if args.get("word_regexp", False):
+        cmd.append("-w")
+
+    context = args.get("context", 0)
+    if context and isinstance(context, int) and context > 0:
+        cmd.extend(["-C", str(context)])
+
+    file_types = args.get("file_types") or []
+    for ft in file_types:
+        cmd.extend(["-t", ft])
+
+    globs = args.get("glob") or []
+    for g in globs:
+        cmd.extend(["--glob", g])
+
+    pattern = args.get("pattern", "")
+    cmd.append(pattern)
+
+    path = args.get("path") or "."
+    abs_path = os.path.join(abs_root, path)
+    cmd.append(abs_path)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    return f"""
+cmd: {" ".join(cmd)}
+
+stdout:
+{result.stdout}
+
+stderror:
+{result.stderr}"""
+
+
+def fd(args: dict, root: str):
+    abs_root = os.path.abspath(root)
+
+    cmd = ["fd", "--color", "never"]
+
+    if args.get("hidden", False):
+        cmd.append("--hidden")
+
+    t = args.get("type")
+    if t == "file":
+        cmd.extend(["-t", "f"])
+    elif t == "directory":
+        cmd.extend(["-t", "d"])
+
+    max_depth = args.get("max_depth", 0)
+    if isinstance("max_depth", int) and max_depth > 0:
+        cmd.extend(["-d", str(max_depth)])
+
+    exts = args.get("extensions") or []
+    for ext in exts:
+        cmd.extend(["-e", ext])
+
+    pattern = args.get("pattern", "")
+    cmd.append(pattern)
+
+    path = args.get("path") or "."
+    abs_path = os.path.join(abs_root, path)
+    cmd.append(abs_path)
+
+    result = subprocess.run(cmd, capture_output=True, text=True)
+
+    return f"""
+cmd: {" ".join(cmd)}
+
+stdout:
+{result.stdout}
+
+stderror:
+{result.stderr}"""
