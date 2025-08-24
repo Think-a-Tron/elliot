@@ -186,7 +186,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                 "model": MODEL_NAME,
                 "messages": messages,
                 "tools": [rg_spec, sed_spec, finish_spec],
-                "reasoning": {"enabled": True},
+                # "reasoning": {"enabled": True},
             }
 
             response = requests.post(
