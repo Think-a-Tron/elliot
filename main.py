@@ -9,9 +9,10 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 from openai import OpenAI
-from rich import print
+from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from tools import finish_spec, rg, rg_spec, sed, sed_spec
 
@@ -35,6 +36,9 @@ class State(TypedDict):
     issue_understanding: str
     context: List[str]
     feedback_to_scout: List[str]
+
+
+console = Console()
 
 
 def create_understanding(state: InputState):
@@ -73,7 +77,7 @@ Keep it concise and technical, but make sure no important detail is lost.""",
     issue_understanding = completion["choices"][0]["message"]["content"]
     total_tokens = completion["usage"]["total_tokens"]
 
-    print(
+    console.print(
         Panel(
             Markdown(issue_understanding),
             title="Issue Understanding",
@@ -142,7 +146,7 @@ def context_coverage(state: State):
     total_tokens = completion["usage"]["total_tokens"]
 
     if coverage["decision"] == "more_context_needed":
-        print(
+        console.print(
             Panel(
                 Markdown("\n".join(f"- {item}" for item in coverage["feedback"])),
                 title="Context Coverage",
@@ -206,9 +210,9 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                         case _:
                             result = ""
 
-                    print(
+                    console.print(
                         Panel(
-                            result,
+                            Text(result),
                             title="Tool Call",
                             border_style="dark_orange",
                         )
