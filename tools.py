@@ -50,43 +50,43 @@ rg_spec: ChatCompletionToolParam = {
     },
 }
 
-fd_spec: ChatCompletionToolParam = {
+sed_spec: ChatCompletionToolParam = {
     "type": "function",
     "function": {
-        "name": "fd",
-        "description": "List files and directories with fd (fast find)",
+        "name": "sed",
+        "description": "Fetch specific lines from a text file using sed.",
         "parameters": {
             "type": "object",
             "properties": {
-                "pattern": {
-                    "type": "string",
-                    "description": "Regex or glob to match file names. Leave empty to list everything",
-                },
                 "path": {
                     "type": "string",
-                    "description": "Directory to search in, defaults to current directory",
-                    "default": ".",
+                    "description": "Path to the input file.",
                 },
-                "extensions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Match by file extension e.g. ['py', 'js']",
-                },
-                "type": {
+                "line_range": {
                     "type": "string",
-                    "enum": ["file", "directory"],
-                    "description": "Restrict results to files or directories",
+                    "description": "Line numbers or range in sed format (e.g., '5', '10,20', '5,+3').",
                 },
-                "hidden": {
-                    "type": "boolean",
-                    "description": "Include hidden files and directories",
-                    "default": False,
-                },
-                "max_depth": {
-                    "type": "integer",
-                    "description": "Limit directory recursion depth",
+                "pattern": {
+                    "type": "string",
+                    "description": "Regex pattern to match lines. If provided, sed will print matching lines.",
                 },
             },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+finish_spec: ChatCompletionToolParam = {
+    "type": "function",
+    "function": {
+        "name": "finish",
+        "description": "Call this function when you have the answer",
+        "parameters": {
+            "type": "object",
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
         },
     },
 }
@@ -124,8 +124,7 @@ def rg(args: dict, root: str) -> str:
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    return f"""
-cmd: {" ".join(cmd)}
+    return f"""{" ".join(cmd)}
 
 stdout:
 {result.stdout}
@@ -134,30 +133,20 @@ stderror:
 {result.stderr}"""
 
 
-def fd(args: dict, root: str):
+def sed(args: dict, root: str):
     abs_root = os.path.abspath(root)
+    cmd = ["sed", "-n"]
 
-    cmd = ["fd", "--color", "never"]
+    line_range = args.get("line_range")
+    pattern = args.get("pattern")
 
-    if args.get("hidden", False):
-        cmd.append("--hidden")
+    if bool(line_range) == bool(pattern):
+        return "Error: provide exactly one of 'pattern' or 'line_range'."
 
-    t = args.get("type")
-    if t == "file":
-        cmd.extend(["-t", "f"])
-    elif t == "directory":
-        cmd.extend(["-t", "d"])
-
-    max_depth = args.get("max_depth", 0)
-    if isinstance("max_depth", int) and max_depth > 0:
-        cmd.extend(["-d", str(max_depth)])
-
-    exts = args.get("extensions") or []
-    for ext in exts:
-        cmd.extend(["-e", ext])
-
-    pattern = args.get("pattern", "")
-    cmd.append(pattern)
+    if pattern:
+        cmd.append(f"/{pattern}/p")
+    else:
+        cmd.append(f"{line_range}p")
 
     path = args.get("path") or "."
     abs_path = os.path.join(abs_root, path)
@@ -165,11 +154,10 @@ def fd(args: dict, root: str):
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    return f"""
-cmd: {" ".join(cmd)}
+    return f"""cmd: {" ".join(cmd)}
 
 stdout:
 {result.stdout}
 
-stderror:
+stderr:
 {result.stderr}"""
