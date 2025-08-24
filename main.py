@@ -1,17 +1,21 @@
 import argparse
+import json
+import requests
 from os import environ
 from pathlib import Path
-from typing import Literal, TypedDict, List
+from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
-from pydantic import BaseModel, Field
+
 from rich import print
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-MODEL_NAME = environ.get("MODEL_NAME", "mistralai/mistral-medium-3.1")
-BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1")
+MODEL_NAME = environ.get("MODEL_NAME", "z-ai/glm-4.5")
+BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
+API_KEY = environ.get("OPENAI_API_KEY", "")
+HEADERS = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
 
 client = OpenAI(base_url=BASE_URL)
 
@@ -31,16 +35,16 @@ class State(TypedDict):
 
 
 def create_understanding(state: InputState):
-    completion = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
             {
                 "role": "user",
                 "content": f"""
 You are analyzing a GitHub issue.
 
 Issue:
-{state["issue"]}
+{state.get("issue")}
 
 Task:
 Create a clear, minimal but complete understanding of the issue.
@@ -57,10 +61,14 @@ Do not propose fixes or plans.
 Keep it concise and technical, but make sure no important detail is lost.""",
             }
         ],
-    )
+        "reasoning": {"enabled": True},
+    }
 
-    understanding = str(completion.choices[0].message.content)
-    total_tokens = completion.usage.total_tokens if completion.usage else 0
+    response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
+    completion = response.json()
+
+    understanding = completion["choices"][0]["message"]["content"]
+    total_tokens = completion["usage"]["total_tokens"]
 
     print(
         Panel(
@@ -71,51 +79,75 @@ Keep it concise and technical, but make sure no important detail is lost.""",
         )
     )
 
-    return {"understanding": completion.choices[0].message.content}
-
-
-class CoverageResponse(BaseModel):
-    decision: Literal["more_context_needed", "enough_context"] = Field(
-        default="more_context_needed"
-    )
-    feedback: List[str] = Field(description="List of search items to scout for")
+    return {"understanding": understanding}
 
 
 def context_coverage(state: State):
     understanding = state.get("understanding")
     context = state.get("context", "none")
 
-    completion = client.chat.completions.parse(
-        model=MODEL_NAME,
-        messages=[
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
             {
                 "role": "user",
-                "content": "Given an understanding of a GitHub issue,"
-                "check if we have enough information/context about the codebase to plan for this issue. "
-                "Give feedback of what else we need from the repo, if current context isn't enough. "
-                "Feedback should be a list of targeted search items and their justifications."
-                f"Issue Understanding: {understanding}\n\n"
-                f"Current Context about the Code: {context}",
+                "content": (
+                    "Given an understanding of a GitHub issue, "
+                    "check if we have enough information/context from the codebase itself "
+                    "to plan for this issue. "
+                    "If the current context isn't enough, give feedback as a list of "
+                    "targeted code searches within the repo (e.g. specific files, "
+                    "functions, classes, or tests) and their justifications. "
+                    "Do not request external sources like RFCs, PRs, or issue pages. "
+                    f"Issue Understanding: {understanding}\n\n"
+                    f"Current Context about the Code: {context}"
+                ),
             }
         ],
-        response_format=CoverageResponse,
-    )
+        "reasoning": {"enabled": True},
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "coverage_response",
+                "strict": True,
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "decision": {
+                            "type": "string",
+                            "enum": ["more_context_needed", "enough_context"],
+                            "description": "Decision about whether more context is needed or not",
+                        },
+                        "feedback": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of search items to scout for",
+                        },
+                    },
+                    "required": ["decision", "feedback"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    }
 
-    coverage = completion.choices[0].message.parsed
-    total_tokens = completion.usage.total_tokens if completion.usage else 0
+    response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
+    completion = response.json()
 
-    if isinstance(coverage, CoverageResponse):
-        if coverage.decision == "more_context_needed":
-            print(
-                Panel(
-                    Markdown("\n".join(f"- {item}" for item in coverage.feedback)),
-                    title="Context Coverage",
-                    subtitle=f"Tokens {total_tokens}",
-                    border_style="yellow",
-                )
+    coverage = json.loads(completion["choices"][0]["message"]["content"])
+    total_tokens = completion["usage"]["total_tokens"]
+
+    if coverage["decision"] == "more_context_needed":
+        print(
+            Panel(
+                Markdown("\n".join(f"- {item}" for item in coverage["feedback"])),
+                title="Context Coverage",
+                subtitle=f"Tokens {total_tokens}",
+                border_style="yellow",
             )
+        )
 
-            return {"feedback_to_scout": coverage.feedback}
+        return {"feedback_to_scout": coverage["feedback"]}
 
     return {"feedback_to_scout": []}
 
