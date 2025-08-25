@@ -92,6 +92,16 @@ finish_spec: ChatCompletionToolParam = {
 }
 
 
+def _truncate_output(output: str, max_lines: int = 100) -> str:
+    lines = output.splitlines()
+
+    if len(lines) > max_lines:
+        truncated = "\n".join(lines[:max_lines])
+        return f"{truncated}\n... [compressed: {len(lines) - max_lines} more lines]"
+
+    return output
+
+
 def rg(args: dict, root: str) -> str:
     abs_root = os.path.abspath(root)
 
@@ -124,12 +134,14 @@ def rg(args: dict, root: str) -> str:
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    return f"""{" ".join(cmd)}
+    stdout = _truncate_output(result.stdout)
+
+    return f"""cmd: {" ".join(cmd)}
 
 stdout:
-{result.stdout}
+{stdout}
 
-stderror:
+stderr:
 {result.stderr}"""
 
 
@@ -154,10 +166,12 @@ def sed(args: dict, root: str):
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
+    stdout = _truncate_output(result.stdout)
+
     return f"""cmd: {" ".join(cmd)}
 
 stdout:
-{result.stdout}
+{stdout}
 
 stderr:
 {result.stderr}"""

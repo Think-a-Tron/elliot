@@ -16,7 +16,7 @@ from rich.text import Text
 
 from tools import finish_spec, rg, rg_spec, sed, sed_spec
 
-MODEL_NAME = environ.get("MODEL_NAME", "deepseek/deepseek-chat-v3.1")
+MODEL_NAME = environ.get("MODEL_NAME", "z-ai/glm-4.5")
 BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 API_KEY = environ.get("OPENAI_API_KEY", "")
 HEADERS = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
@@ -82,7 +82,7 @@ Keep it concise and technical, but make sure no important detail is lost.""",
             Markdown(issue_understanding),
             title="Issue Understanding",
             subtitle=f"Tokens {total_tokens}",
-            border_style="blue",
+            border_style="cyan",
         )
     )
 
@@ -91,7 +91,7 @@ Keep it concise and technical, but make sure no important detail is lost.""",
 
 def context_coverage(state: State):
     issue_understanding = state.get("issue_understanding")
-    context = state.get("context", "none")
+    context = state.get("context") or []
 
     payload = {
         "model": MODEL_NAME,
@@ -102,17 +102,18 @@ def context_coverage(state: State):
                     "Given an understanding of a GitHub issue, "
                     "check if we have enough information/context from the current codebase itself "
                     "to plan for this issue. "
-                    "If the current context isn't enough, give feedback as a list of "
+                    "If the context is enough, just decide 'enough_context'. "
+                    "If the current context isn't enough, give feedback as a list of <5 "
                     "targeted, detailed, and atomic code searches within the repo (e.g. specific files, "
                     "functions, classes, or tests). "
                     "Do not request or suggest external sources such as RFCs, PRs, issue pages, "
-                    "or git commit history. Stay strictly within the present codebase snapshot."
+                    "or git commit history. Stay strictly within the present codebase snapshot.\n"
                     f"Issue Understanding: {issue_understanding}\n\n"
                     f"Current Context about the Code: {chr(10) + chr(10).join(context)}"
                 ),
             }
         ],
-        "reasoning": {"enabled": True},
+        "reasoning": {"enabled": True if MODEL_NAME == "openai/gpt-5" else False},
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -167,8 +168,11 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
         return Command(goto=END)
 
     context = state.get("context") or []
+    item_contexts = []
 
     for item in feedback_items:
+        console.print(Panel(Text(item), title="Gathering Context", border_style="blue"))
+
         item_context = ""
 
         messages = [
@@ -186,7 +190,9 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                 "model": MODEL_NAME,
                 "messages": messages,
                 "tools": [rg_spec, sed_spec, finish_spec],
-                # "reasoning": {"enabled": True},
+                "reasoning": {
+                    "enabled": True if MODEL_NAME == "openai/gpt-5" else False
+                },
             }
 
             response = requests.post(
@@ -201,9 +207,15 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
 
                     match tool_call["function"]["name"]:
                         case "rg":
-                            result = rg(args, runtime.context["repo_root"])
+                            try:
+                                result = rg(args, runtime.context["repo_root"])
+                            except Exception as e:
+                                result = f"Error occured: {e}"
                         case "sed":
-                            result = sed(args, runtime.context["repo_root"])
+                            try:
+                                result = sed(args, runtime.context["repo_root"])
+                            except Exception as e:
+                                result = f"Error occured: {e}"
                         case "finish":
                             item_context = args.get("answer")
                             result = item_context
@@ -214,7 +226,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                         Panel(
                             Text(result),
                             title="Tool Call",
-                            border_style="dark_orange",
+                            border_style="magenta",
                         )
                     )
 
@@ -226,7 +238,34 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                         }
                     )
 
-        context.append(item_context)
+        item_contexts.append(item_context)
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Pack the following individual context items about "
+                "a code issue into a single concise context report. "
+                "Don't oversummarize and miss information. \n"
+                f"{(chr(10) + '-----' + chr(10)).join(item_contexts)}",
+            }
+        ],
+        "reasoning": {"enabled": True},
+    }
+
+    response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
+    completion = response.json()
+    context.append(completion["choices"][0]["message"]["content"])
+
+    console.print(
+        Panel(
+            Markdown(context[-1]),
+            title="Packed Context",
+            subtitle=f"Tokens {completion['usage']['total_tokens']}",
+            border_style="blue",
+        )
+    )
 
     return Command(update={"context": context}, goto="context_coverage")
 
