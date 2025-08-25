@@ -98,42 +98,44 @@ def context_coverage(state: State):
         "messages": [
             {
                 "role": "user",
-                "content": (
-                    "Given an understanding of a GitHub issue, "
-                    "check if we have enough information/context from the current codebase itself "
-                    "to plan for this issue. "
-                    "If the context is enough, just decide 'enough_context'. "
-                    "If the current context isn't enough, give feedback as a list of <5 "
-                    "targeted, detailed, and atomic code searches within the repo (e.g. specific files, "
-                    "functions, classes, or tests). "
-                    "Do not request or suggest external sources such as RFCs, PRs, issue pages, "
-                    "or git commit history. Stay strictly within the present codebase snapshot.\n"
-                    f"Issue Understanding: {issue_understanding}\n\n"
-                    f"Current Context about the Code: {chr(10) + chr(10).join(context)}"
-                ),
+                "content": f"""
+Analyze this GitHub issue understanding to determine if we have sufficient codebase context for solving.
+
+If context is insufficient, provide upto 5 specific, atomic code searches within the repository.
+Focus on files, functions, classes, or tests - no external resources.
+Output in JSON only.
+
+Issue Understanding:
+{issue_understanding}
+
+Context:
+{(chr(10) + chr(10)).join(context) if context else "No context provided"}""",
             }
         ],
-        "reasoning": {"enabled": True if MODEL_NAME == "openai/gpt-5" else False},
+        "reasoning": {"enabled": MODEL_NAME == "openai/gpt-5"},
         "response_format": {
             "type": "json_schema",
             "json_schema": {
-                "name": "coverage_response",
+                "name": "context_analysis",
                 "strict": True,
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "decision": {
-                            "type": "string",
-                            "enum": ["more_context_needed", "enough_context"],
-                            "description": "Decision about whether more context is needed or not",
+                        "has_sufficient_context": {
+                            "type": "boolean",
+                            "description": "Whether current context is sufficient for issue planning",
                         },
-                        "feedback": {
+                        "required_searches": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "List of search items to scout for",
+                            "maxItems": 5,
+                            "description": "Specific code searches needed (empty if context is sufficient)",
                         },
                     },
-                    "required": ["decision", "feedback"],
+                    "required": [
+                        "has_sufficient_context",
+                        "required_searches",
+                    ],
                     "additionalProperties": False,
                 },
             },
@@ -146,17 +148,19 @@ def context_coverage(state: State):
     coverage = json.loads(completion["choices"][0]["message"]["content"])
     total_tokens = completion["usage"]["total_tokens"]
 
-    if coverage["decision"] == "more_context_needed":
+    if not coverage["has_sufficient_context"]:
         console.print(
             Panel(
-                Markdown("\n".join(f"- {item}" for item in coverage["feedback"])),
+                Markdown(
+                    "\n".join(f"- {item}" for item in coverage["required_searches"])
+                ),
                 title="Context Coverage",
                 subtitle=f"Tokens {total_tokens}",
                 border_style="yellow",
             )
         )
 
-        return {"feedback_to_scout": coverage["feedback"]}
+        return {"feedback_to_scout": coverage["required_searches"]}
 
     return {"feedback_to_scout": []}
 
@@ -178,10 +182,10 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
         messages = [
             {
                 "role": "user",
-                "content": "You are a code scout with access to "
-                "ripgrep and sed to gather context to work on GitHub issues. "
-                "When you have gathered enough context about asked item, call finish with context.\n"
-                f"Gather detailed code context about {item}",
+                "content": "You are a code scout with access to ripgrep and sed tools to gather context "
+                "for GitHub issues. When you have sufficient context about the requested "
+                "item, call finish with the gathered context.\n\n"
+                f"Gather detailed code context about: {item}",
             }
         ]
 
@@ -190,9 +194,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                 "model": MODEL_NAME,
                 "messages": messages,
                 "tools": [rg_spec, sed_spec, finish_spec],
-                "reasoning": {
-                    "enabled": True if MODEL_NAME == "openai/gpt-5" else False
-                },
+                "reasoning": {"enabled": MODEL_NAME == "openai/gpt-5"},
             }
 
             response = requests.post(
@@ -240,15 +242,18 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
 
         item_contexts.append(item_context)
 
+    separator = "\n" + "-" * 50 + "\n"
+    combined_contexts = separator.join(item_contexts)
+
     payload = {
         "model": MODEL_NAME,
         "messages": [
             {
                 "role": "user",
-                "content": "Pack the following individual context items about "
-                "a code issue into a single concise context report. "
-                "Don't oversummarize and miss information. \n"
-                f"{(chr(10) + '-----' + chr(10)).join(item_contexts)}",
+                "content": "Consolidate the following context items about a code issue into "
+                "a single, comprehensive context report. Preserve important details "
+                "while removing redundancy and improving organization.\n\n"
+                f"{combined_contexts}",
             }
         ],
         "reasoning": {"enabled": True},
@@ -261,7 +266,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
     console.print(
         Panel(
             Markdown(context[-1]),
-            title="Packed Context",
+            title="Consolidated Context",
             subtitle=f"Tokens {completion['usage']['total_tokens']}",
             border_style="blue",
         )
