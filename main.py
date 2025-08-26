@@ -130,7 +130,7 @@ def context_coverage(state: State):
                 "content": f"""
 Analyze this GitHub issue understanding to determine if we have sufficient codebase context for solving.
 
-If context is insufficient, provide upto 5 specific, detailed, and atomic code searches within the repository.
+If context is insufficient, provide upto 5 specific, detailed (2-3 lines), and atomic code searches within the repository.
 Focus on files, functions, classes, or tests - no external resources.
 
 Issue Understanding:
@@ -260,35 +260,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
 
         item_contexts.append(item_context)
 
-    separator = "\n" + "-" * 50 + "\n"
-    combined_contexts = separator.join(item_contexts)
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {
-                "role": "user",
-                "content": "Consolidate the following context items about a code issue into "
-                "a single, comprehensive context report. Preserve important details "
-                "while removing redundancy and improving organization.\n\n"
-                f"{combined_contexts}",
-            }
-        ],
-        "reasoning": {"enabled": True},
-    }
-
-    response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
-    completion = response.json()
-    context.append(completion["choices"][0]["message"]["content"])
-
-    console.print(
-        Panel(
-            Markdown(context[-1]),
-            title="Consolidated Context",
-            subtitle=f"Tokens {completion['usage']['total_tokens']}",
-            border_style="blue",
-        )
-    )
+    context.extend(item_contexts)
 
     return Command(update={"context": context}, goto="context_coverage")
 
