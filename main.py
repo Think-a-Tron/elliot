@@ -91,34 +91,16 @@ Keep it concise and technical, but make sure no important detail is lost.""",
 
 def context_coverage(state: State):
     issue_understanding = state.get("issue_understanding")
-    context = state.get("context") or []
+    context = state.get("context")
 
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {
-                "role": "user",
-                "content": f"""
-Analyze this GitHub issue understanding to determine if we have sufficient codebase context for solving.
-
-If context is insufficient, provide upto 5 specific, atomic code searches within the repository.
-Focus on files, functions, classes, or tests - no external resources.
-Output in JSON only.
-
-Issue Understanding:
-{issue_understanding}
-
-Context:
-{(chr(10) + chr(10)).join(context) if context else "No context provided"}""",
-            }
-        ],
-        "reasoning": {"enabled": MODEL_NAME == "openai/gpt-5"},
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "context_analysis",
-                "strict": True,
-                "schema": {
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "analyze_context_coverage",
+                "description": "Analyze if the current codebase context is sufficient for solving the GitHub issue"
+                " and provide specific code searches if needed",
+                "parameters": {
                     "type": "object",
                     "properties": {
                         "has_sufficient_context": {
@@ -129,23 +111,58 @@ Context:
                             "type": "array",
                             "items": {"type": "string"},
                             "maxItems": 5,
-                            "description": "Specific code searches needed (empty if context is sufficient)",
+                            "description": "Specific, detailed, and atomic code searches needed within the repository "
+                            "(empty array if context is sufficient). Focus on files, functions, classes, or tests - no external resources.",
                         },
                     },
-                    "required": [
-                        "has_sufficient_context",
-                        "required_searches",
-                    ],
+                    "required": ["has_sufficient_context", "required_searches"],
                     "additionalProperties": False,
                 },
             },
-        },
+        }
+    ]
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""
+Analyze this GitHub issue understanding to determine if we have sufficient codebase context for solving.
+
+If context is insufficient, provide upto 5 specific, detailed, and atomic code searches within the repository.
+Focus on files, functions, classes, or tests - no external resources.
+
+Issue Understanding:
+{issue_understanding}
+
+Context:
+{(chr(10) + chr(10)).join(context) if context else "No context provided"}""",
+            }
+        ],
+        "reasoning": {"enabled": True},
+        "tools": tools,
+        "tool_choice": "required",
     }
 
     response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
     completion = response.json()
 
-    coverage = json.loads(completion["choices"][0]["message"]["content"])
+    message = completion["choices"][0]["message"]
+    tool_calls = message.get("tool_calls", [])
+
+    if not tool_calls:
+        print("No tool calls found in response")
+        return {"feedback_to_scout": []}
+
+    tool_call = tool_calls[0]
+    function_args = json.loads(tool_call["function"]["arguments"])
+
+    coverage = {
+        "has_sufficient_context": function_args["has_sufficient_context"],
+        "required_searches": function_args["required_searches"],
+    }
+
     total_tokens = completion["usage"]["total_tokens"]
 
     if not coverage["has_sufficient_context"]:
@@ -194,7 +211,8 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
                 "model": MODEL_NAME,
                 "messages": messages,
                 "tools": [rg_spec, sed_spec, finish_spec],
-                "reasoning": {"enabled": MODEL_NAME == "openai/gpt-5"},
+                "reasoning": {"enabled": True},
+                "tool_choice": "required",
             }
 
             response = requests.post(
