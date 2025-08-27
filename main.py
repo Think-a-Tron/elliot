@@ -2,7 +2,7 @@ import argparse
 import json
 from os import environ
 from pathlib import Path
-from typing import List, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 import requests
 from langgraph.graph import END, START, StateGraph
@@ -14,9 +14,9 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from tools import finish_spec, rg, rg_spec, sed, sed_spec
+from tools import finish_spec, plan_spec, rg, rg_spec, sed, sed_spec
 
-MODEL_NAME = environ.get("MODEL_NAME", "z-ai/glm-4.5")
+MODEL_NAME = environ.get("MODEL_NAME", "openai/gpt-5")
 BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
 API_KEY = environ.get("OPENAI_API_KEY", "")
 HEADERS = {"Content-Type": "application/json", "Authorization": f"Bearer {API_KEY}"}
@@ -36,6 +36,7 @@ class State(TypedDict):
     issue_understanding: str
     context: List[str]
     feedback_to_scout: List[str]
+    plan: Dict[str, Any]
 
 
 console = Console()
@@ -111,7 +112,7 @@ def context_coverage(state: State):
                             "type": "array",
                             "items": {"type": "string"},
                             "maxItems": 5,
-                            "description": "Specific, detailed, and atomic code searches needed within the repository "
+                            "description": "Specific, detailed (2-3 lines), and atomic code searches needed within the repository "
                             "(empty array if context is sufficient). Focus on files, functions, classes, or tests - no external resources.",
                         },
                     },
@@ -186,7 +187,7 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
     feedback_items = state.get("feedback_to_scout")
 
     if len(feedback_items) == 0:
-        return Command(goto=END)
+        return Command(goto="build_plan")
 
     context = state.get("context") or []
     item_contexts = []
@@ -265,14 +266,95 @@ def scout(state: State, runtime: Runtime[ContextSchema]):
     return Command(update={"context": context}, goto="context_coverage")
 
 
+def build_plan(state: State):
+    issue_understanding = state.get("issue_understanding")
+    context = state.get("context")
+
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "user",
+                "content": f"""
+You are the planner for a coding agent workflow.
+
+Given:
+- Issue Understanding:
+{issue_understanding}
+
+- Collected Context (snippets, file paths, notes):
+{(chr(10) + chr(10)).join(context) if context else "No additional context."}
+
+Task:
+Return a precise step-by-step plan to resolve the issue.
+
+Plan must:
+- Start with searches to confirm impact and locations.
+- Include concrete searches(rg) and edits(sed).
+- Be realistic and minimal.
+
+Return ONLY via the function with structured fields.
+    """,
+            }
+        ],
+        "reasoning": {"enabled": True},
+        "tools": [plan_spec],
+        "tool_choice": "required",
+    }
+
+    response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
+    completion = response.json()
+    message = completion["choices"][0]["message"]
+    tool_calls = message.get("tool_calls")
+
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    total_tokens = completion["usage"]["total_tokens"]
+
+    lines = [f"**Summary**\n\n{args.get('summary', '').strip()}\n"]
+    lines.append("**Steps**")
+
+    for step in args.get("steps", []):
+        id_ = step.get("id", "?")
+        kind = step.get("kind", "")
+        what = step.get("what", "").strip()
+        why = step.get("why", "").strip()
+        tool = step.get("tool", "")
+        tgts = step.get("targets", [])
+
+        block = []
+        block.append(f"- **{id_}** · *{kind}* - {what}")
+
+        if why:
+            block.append(f"  - _Why:_ {why}")
+        if tool:
+            block.append(f"  - _Tool:_ `{tool}`")
+        if tgts:
+            block.append(f"  - _Targets:_ {', '.join(tgts)}")
+
+        lines.append("\n".join(block))
+
+    console.print(
+        Panel(
+            Markdown("\n\n".join(lines)),
+            title="Plan",
+            subtitle=f"Tokens {total_tokens}",
+            border_style="green",
+        )
+    )
+
+    return {"plan": args}
+
+
 builder = StateGraph(State, input_schema=InputState, context_schema=ContextSchema)
 builder.add_node(create_understanding)
 builder.add_node(context_coverage)
 builder.add_node(scout)
+builder.add_node(build_plan)
 
 builder.add_edge(START, "create_understanding")
 builder.add_edge("create_understanding", "context_coverage")
 builder.add_edge("context_coverage", "scout")
+builder.add_edge("build_plan", END)
 
 graph = builder.compile()
 
