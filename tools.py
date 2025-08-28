@@ -91,66 +91,6 @@ finish_spec: ChatCompletionToolParam = {
     },
 }
 
-plan_spec: ChatCompletionToolParam = {
-    "type": "function",
-    "function": {
-        "name": "propose_plan",
-        "description": (
-            "Create a concrete, step-by-step plan to resolve the issue using the available "
-            "code context. Include searches (rg), edits (sed/manual), and validations. "
-            "Prefer precise, atomic steps and runnable commands/examples."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "summary": {
-                    "type": "string",
-                    "description": "Concise summary of the approach.",
-                },
-                "steps": {
-                    "type": "array",
-                    "description": "Ordered steps from searches to edits",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "description": "Short stable id, e.g. S1, E2",
-                            },
-                            "kind": {
-                                "type": "string",
-                                "enum": ["search", "edit"],
-                                "description": "What type of action this is.",
-                            },
-                            "why": {
-                                "type": "string",
-                                "description": "Rationale for this step.",
-                            },
-                            "what": {
-                                "type": "string",
-                                "description": "Exactly what to do/inspect/change.",
-                            },
-                            "tool": {
-                                "type": "string",
-                                "enum": ["rg", "sed"],
-                                "description": "Primary tool to use.",
-                            },
-                            "targets": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "File globs or concrete paths/functions.",
-                            },
-                        },
-                        "required": ["id", "kind", "what"],
-                    },
-                },
-            },
-            "required": ["summary", "steps"],
-            "additionalProperties": False,
-        },
-    },
-}
-
 
 def _truncate_output(output: str, max_lines: int = 100) -> str:
     lines = output.splitlines()

@@ -14,7 +14,7 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from tools import finish_spec, plan_spec, rg, rg_spec, sed, sed_spec
+from tools import finish_spec, rg, rg_spec, sed, sed_spec
 
 MODEL_NAME = environ.get("MODEL_NAME", "openai/gpt-5")
 BASE_URL = environ.get("BASE_URL", "https://openrouter.ai/api/v1/chat/completions")
@@ -131,8 +131,9 @@ def context_coverage(state: State):
                 "content": f"""
 Analyze this GitHub issue understanding to determine if we have sufficient codebase context for solving.
 
-If context is insufficient, provide upto 5 specific, detailed (2-3 lines), and atomic code searches within the repository.
-Focus on files, functions, classes, or tests - no external resources.
+If context is insufficient, suggest relevant and specific code searches (each 2-3 lines).
+Focus on files, functions, classes, or tests — no external resources.
+Only provide as many searches as are truly useful (could be none, one, or several, but usually not more than five).
 
 Issue Understanding:
 {issue_understanding}
@@ -270,79 +271,93 @@ def build_plan(state: State):
     issue_understanding = state.get("issue_understanding")
     context = state.get("context")
 
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "emit_plan",
+                "description": "Emit an ordered list of steps (each a string). "
+                "Each step should be a single rg or sed command "
+                "with a short rationale inline.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "List of steps, each like:\n"
+                                "- SEARCH: rg --color never --line-number -n 'pattern' path  # rationale\n"
+                                "- EDIT: sed -i 's/old/new/' file.py  # rationale"
+                            ),
+                        }
+                    },
+                    "required": ["steps"],
+                },
+            },
+        }
+    ]
+
+    system_rules = """
+You are a planner that outputs a series of shell commands for addressing a GitHub issue.
+
+Constraints:
+- Use ONLY rg (for searches) and sed (for edits).
+- Each step = one command + inline comment rationale.
+- Keep steps atomic and ordered.
+- Use -n and -C N flags for rg to show line numbers/context.
+- For sed: prefer narrow ranges or anchored substitutions; add comments explaining intent.
+- Avoid vague repo-wide replacements unless you already narrowed with rg.
+- Output only through the emit_plan tool.
+"""
+
+    user_prompt = f"""
+Issue Understanding:
+{issue_understanding}
+
+Context (if any):
+{(chr(10) + chr(10)).join(context)}
+
+Task:
+Write a clear, ordered plan of rg and sed commands to tackle the issue.
+Each step should look like:
+
+rg -n -C 2 "WidgetX" src/widgets/*.py   # locate class definition
+sed -i '120,125s/timeout=10/timeout=30/' src/widgets/widget_x.py   # change default timeout
+
+Be explicit and comprehensive.
+"""
+
     payload = {
         "model": MODEL_NAME,
         "messages": [
-            {
-                "role": "user",
-                "content": f"""
-You are the planner for a coding agent workflow.
-
-Given:
-- Issue Understanding:
-{issue_understanding}
-
-- Collected Context (snippets, file paths, notes):
-{(chr(10) + chr(10)).join(context) if context else "No additional context."}
-
-Task:
-Return a precise step-by-step plan to resolve the issue.
-
-Plan must:
-- Start with searches to confirm impact and locations.
-- Include concrete searches(rg) and edits(sed).
-- Be realistic and minimal.
-
-Return ONLY via the function with structured fields.
-    """,
-            }
+            {"role": "system", "content": system_rules},
+            {"role": "user", "content": user_prompt},
         ],
-        "reasoning": {"enabled": True},
-        "tools": [plan_spec],
+        "tools": tools,
         "tool_choice": "required",
+        "reasoning": {"enabled": True},
     }
 
     response = requests.post(BASE_URL, headers=HEADERS, data=json.dumps(payload))
     completion = response.json()
-    message = completion["choices"][0]["message"]
-    tool_calls = message.get("tool_calls")
 
-    args = json.loads(tool_calls[0]["function"]["arguments"])
     total_tokens = completion["usage"]["total_tokens"]
 
-    lines = [f"**Summary**\n\n{args.get('summary', '').strip()}\n"]
-    lines.append("**Steps**")
-
-    for step in args.get("steps", []):
-        id_ = step.get("id", "?")
-        kind = step.get("kind", "")
-        what = step.get("what", "").strip()
-        why = step.get("why", "").strip()
-        tool = step.get("tool", "")
-        tgts = step.get("targets", [])
-
-        block = []
-        block.append(f"- **{id_}** · *{kind}* - {what}")
-
-        if why:
-            block.append(f"  - _Why:_ {why}")
-        if tool:
-            block.append(f"  - _Tool:_ `{tool}`")
-        if tgts:
-            block.append(f"  - _Targets:_ {', '.join(tgts)}")
-
-        lines.append("\n".join(block))
+    tool_calls = completion["choices"][0]["message"]["tool_calls"]
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    steps = args["steps"]
 
     console.print(
         Panel(
-            Markdown("\n\n".join(lines)),
-            title="Plan",
+            Markdown("\n".join(f"- {s}" for s in steps)),
+            title="Work Plan",
             subtitle=f"Tokens {total_tokens}",
             border_style="green",
         )
     )
 
-    return {"plan": args}
+    return {"plan": {"steps": steps}}
 
 
 builder = StateGraph(State, input_schema=InputState, context_schema=ContextSchema)
@@ -351,10 +366,12 @@ builder.add_node(context_coverage)
 builder.add_node(scout)
 builder.add_node(build_plan)
 
+
 builder.add_edge(START, "create_understanding")
 builder.add_edge("create_understanding", "context_coverage")
 builder.add_edge("context_coverage", "scout")
 builder.add_edge("build_plan", END)
+
 
 graph = builder.compile()
 
