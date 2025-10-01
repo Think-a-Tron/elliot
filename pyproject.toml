@@ -1,7 +1,7 @@
 [project]
 name = "elliot"
 version = "0.1.0"
-description = "Coding Agent Orchestrator"
+description = "Coding Agents Orchestrator"
 authors = [{name = "ExpressGradient", email = "johndoeknown@protonmail.com"}]
 readme = "README.md"
 requires-python = ">=3.12"
