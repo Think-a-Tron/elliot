@@ -1,0 +1,2 @@
+# Elliot
+Coding Agent Orchestrator

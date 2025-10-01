@@ -1,0 +1,11 @@
+[project]
+name = "elliot"
+version = "0.1.0"
+description = "Coding Agent Orchestrator"
+authors = [{name = "ExpressGradient", email = "johndoeknown@protonmail.com"}]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ast-grep-cli>=0.39.5",
+    "openai>=2.0.0",
+]
