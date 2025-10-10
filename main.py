@@ -426,6 +426,57 @@ def sed_write(path: str, command: str) -> str:
     return output_text
 
 
+@function_tool
+def git_run(args: str, cwd: Optional[str] = None) -> str:
+    """Run git commands. Just specify the args after `git`."""
+
+    params = {"args": args, "cwd": cwd}
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
+
+    if not args:
+        status = "error"
+        detail = "no arguments provided"
+        output_text = "[elliot][tool git_run] no arguments provided."
+        log_tool_event("git_run", status, params, detail)
+        return output_text
+
+    if not confirm_write_action(f"git_run will execute 'git {args}' in a shell."):
+        status = "skipped"
+        detail = "write permission denied"
+        output_text = "[elliot][tool git_run] write permission denied."
+        log_tool_event("git_run", status, params, detail)
+        return output_text
+
+    try:
+        result = subprocess.run(
+            ["git", *args.split()],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+    except Exception as error:
+        status = "error"
+        detail = f"failed to execute git: {error}"
+        output_text = f"[elliot][tool git_run] unable to execute git: {error}"
+    else:
+        if result.returncode != 0:
+            status = "error"
+            detail = f"git exited with return code `{result.returncode}`"
+            output_text = result.stderr or (
+                f"[elliot][tool git_run] command failed (returncode={result.returncode})."
+            )
+        else:
+            detail = "git command completed successfully"
+            output_text = result.stdout
+    finally:
+        log_tool_event("git_run", status, params, detail)
+
+    return output_text
+
+
 TOOLS = {
     "ast_grep_run_search": ast_grep_run_search,
     "ast_grep_run_rewrite": ast_grep_run_rewrite,
@@ -433,6 +484,7 @@ TOOLS = {
     "tail": tail,
     "head": head,
     "sed_write": sed_write,
+    "git_run": git_run,
 }
 
 
