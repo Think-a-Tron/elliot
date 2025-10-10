@@ -9,4 +9,5 @@ dependencies = [
     "ast-grep-cli>=0.39.5",
     "openai>=2.0.0",
     "openai-agents>=0.1.0",
+    "rich>=14.2.0",
 ]

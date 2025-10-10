@@ -1,31 +1,74 @@
 import argparse
 import os
 import subprocess
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, Runner, function_tool, set_tracing_disabled
+from rich.console import Console
+from rich.markdown import Markdown
 
 MODEL = "gpt-5"
+set_tracing_disabled(True)
+
+console = Console()
+
+
+def _format_value(value: Any) -> str:
+    """Format values for logging in a markdown-friendly way."""
+
+    if isinstance(value, str):
+        return f"`{value}`" if value else "`''`"
+    if isinstance(value, (list, tuple)):
+        rendered = ", ".join(_format_value(item) for item in value)
+        return f"[{rendered}]"
+    if isinstance(value, dict):
+        rendered = ", ".join(
+            f"{_format_value(key)}: {_format_value(val)}" for key, val in value.items()
+        )
+        return f"{{{rendered}}}"
+    return f"`{value!r}`"
+
+
+def log_markdown(message: str) -> None:
+    """Render log output as simple Markdown with a trailing spacer."""
+
+    console.print(Markdown(message))
+    console.print()
+
+
+def log_tool_event(
+    tool: str, status: str, params: Dict[str, Any], detail: Optional[str] = None
+) -> None:
+    """Emit a single markdown log entry describing a tool invocation."""
+
+    parameters = (
+        ", ".join(f"{key}={_format_value(value)}" for key, value in params.items())
+        or "none"
+    )
+    blocks = [f"**[elliot][tool {tool}] {status.upper()}**"]
+    if detail:
+        blocks.append(detail)
+    blocks.append(f"params: {parameters}")
+    log_markdown("\n".join(blocks))
 
 
 def confirm_write_action(description: str) -> bool:
     """Prompt the user for permission before performing a write action."""
 
-    prompt = (
-        f"[elliot] {description}\n"
-        "Proceed? [y/N]: "
-    )
+    prompt = f"[elliot] {description}\nProceed? [y/N]: "
     try:
         response = input(prompt)
     except EOFError:
-        print("[elliot] unable to prompt for confirmation (EOF). Denying by default.")
+        log_markdown(
+            "**[elliot]** unable to prompt for confirmation (EOF). Denying by default."
+        )
         return False
 
     allow = response.strip().lower() in {"y", "yes"}
     if allow:
-        print("[elliot] permission granted.")
+        log_markdown("**[elliot]** permission granted.")
     else:
-        print("[elliot] permission denied.")
+        log_markdown("**[elliot]** permission denied.")
     return allow
 
 
@@ -42,11 +85,16 @@ def ast_grep_run_search(
         globs: Include/exclude file globs
         context: Number of lines of context to show around each match
     """
-    print(
-        "[elliot][tool ast_grep_run_search] "
-        f"pattern={pattern!r}, lang={lang or 'auto'}, "
-        f"paths={paths or ['.']}, globs={globs or []}, context={context}"
-    )
+    params = {
+        "pattern": pattern,
+        "lang": lang or "auto",
+        "paths": paths or ["."],
+        "globs": globs or [],
+        "context": context,
+    }
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
     command = ["ast-grep", "run", "--pattern", pattern]
 
     if lang:
@@ -60,26 +108,36 @@ def ast_grep_run_search(
 
     command.extend(paths or ["."])
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "NO_COLOR": "1"},
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        output = []
+        if result.stdout:
+            output.append(result.stdout.rstrip())
+        if result.stderr:
+            output.append(result.stderr.rstrip())
+        if result.returncode != 0:
+            status = "error"
+            detail = f"ast-grep exited with return code `{result.returncode}`"
+            if not output:
+                output.append(f"ast-grep exited with return code {result.returncode}.")
+        else:
+            detail = "ast-grep completed successfully"
+        output_text = "\n".join(output)
+    except Exception as error:
+        status = "error"
+        detail = f"failed to invoke ast-grep: {error}"
+        output_text = (
+            f"[elliot][tool ast_grep_run_search] unable to execute ast-grep: {error}"
+        )
+    finally:
+        log_tool_event("ast_grep_run_search", status, params, detail)
 
-    output = []
-    if result.stdout:
-        output.append(result.stdout.rstrip())
-    if result.stderr:
-        output.append(result.stderr.rstrip())
-
-    if result.returncode != 0 and not output:
-        output.append(f"ast-grep exited with return code {result.returncode}.")
-
-    print(
-        f"[elliot][tool ast_grep_run_search] completed (returncode={result.returncode})"
-    )
-    return "\n".join(output)
+    return output_text
 
 
 @function_tool
@@ -95,18 +153,24 @@ def ast_grep_run_rewrite(
         paths: Files or directories to apply the rewrite
     """
 
-    print(
-        "[elliot][tool ast_grep_run_rewrite] "
-        f"pattern={pattern!r}, rewrite={rewrite!r}, "
-        f"lang={lang or 'auto'}, paths={paths or ['.']}"
-    )
+    params = {
+        "pattern": pattern,
+        "rewrite": rewrite,
+        "lang": lang or "auto",
+        "paths": paths or ["."],
+    }
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
 
     if not confirm_write_action(
         "ast_grep_run_rewrite will modify files in-place using ast-grep."
     ):
-        message = "[elliot][tool ast_grep_run_rewrite] write permission denied."
-        print(message)
-        return message
+        status = "skipped"
+        detail = "write permission denied"
+        output_text = "[elliot][tool ast_grep_run_rewrite] write permission denied."
+        log_tool_event("ast_grep_run_rewrite", status, params, detail)
+        return output_text
 
     command = [
         "ast-grep",
@@ -123,49 +187,68 @@ def ast_grep_run_rewrite(
 
     command.extend(paths or ["."])
 
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        env={**os.environ, "NO_COLOR": "1"},
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
 
-    output = []
-    if result.stdout:
-        output.append(result.stdout.rstrip())
-    if result.stderr:
-        output.append(result.stderr.rstrip())
+        output = []
+        if result.stdout:
+            output.append(result.stdout.rstrip())
+        if result.stderr:
+            output.append(result.stderr.rstrip())
 
-    if result.returncode != 0 and not output:
-        output.append(f"ast-grep exited with return code {result.returncode}.")
+        if result.returncode != 0:
+            status = "error"
+            detail = f"ast-grep exited with return code `{result.returncode}`"
+            if not output:
+                output.append(f"ast-grep exited with return code {result.returncode}.")
+        else:
+            detail = "ast-grep rewrite completed successfully"
 
-    print(
-        "[elliot][tool ast_grep_run_rewrite] "
-        f"completed (returncode={result.returncode})"
-    )
-    return "\n".join(output)
+        output_text = "\n".join(output)
+    except Exception as error:
+        status = "error"
+        detail = f"failed to invoke ast-grep: {error}"
+        output_text = (
+            f"[elliot][tool ast_grep_run_rewrite] unable to execute ast-grep: {error}"
+        )
+    finally:
+        log_tool_event("ast_grep_run_rewrite", status, params, detail)
+
+    return output_text
 
 
 @function_tool
 def list_directory(path: str = ".", show_hidden: bool = False) -> str:
     """List files and directories within a path."""
 
-    print(f"[elliot][tool list_directory] path={path!r}, show_hidden={show_hidden}")
     target_path = path or "."
+    params = {"path": target_path, "show_hidden": show_hidden}
+    status = "success"
+    detail: Optional[str] = None
+    result = ""
 
     try:
         entries = sorted(os.listdir(target_path))
     except Exception as error:
-        message = (
+        status = "error"
+        detail = str(error)
+        result = (
             f"[elliot][tool list_directory] unable to list {target_path!r}: {error}"
         )
-        print(message)
-        return message
+    else:
+        filtered = [
+            entry for entry in entries if show_hidden or not entry.startswith(".")
+        ]
+        detail = f"returned {len(filtered)} entries"
+        result = "\n".join(filtered)
+    finally:
+        log_tool_event("list_directory", status, params, detail)
 
-    filtered = [entry for entry in entries if show_hidden or not entry.startswith(".")]
-
-    result = "\n".join(filtered)
-    print("[elliot][tool list_directory] completed.")
     return result
 
 
@@ -173,16 +256,24 @@ def list_directory(path: str = ".", show_hidden: bool = False) -> str:
 def head(path: str, lines: int = 50) -> str:
     """Return the first N lines from a file, similar to the Unix `head` command."""
 
-    print(f"[elliot][tool head] path={path!r}, lines={lines}")
+    params = {"path": path, "lines": lines}
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
+
     if not path:
-        message = "[elliot][tool head] no path provided."
-        print(message)
-        return message
+        status = "error"
+        detail = "no path provided"
+        output_text = "[elliot][tool head] no path provided."
+        log_tool_event("head", status, params, detail)
+        return output_text
 
     if lines <= 0:
-        message = "[elliot][tool head] number of lines must be positive."
-        print(message)
-        return message
+        status = "error"
+        detail = "non-positive line count"
+        output_text = "[elliot][tool head] number of lines must be positive."
+        log_tool_event("head", status, params, detail)
+        return output_text
 
     command = ["head", "-n", str(lines), path]
 
@@ -194,36 +285,48 @@ def head(path: str, lines: int = 50) -> str:
             env={**os.environ, "NO_COLOR": "1"},
         )
     except Exception as error:
-        message = f"[elliot][tool head] unable to execute head: {error}"
-        print(message)
-        return message
+        status = "error"
+        detail = f"unable to execute head: {error}"
+        output_text = f"[elliot][tool head] unable to execute head: {error}"
+    else:
+        if result.returncode != 0:
+            status = "error"
+            detail = f"head failed with return code `{result.returncode}`"
+            output_text = (
+                f"[elliot][tool head] command failed (returncode={result.returncode}). "
+                f"{result.stderr.strip() or 'Unknown error.'}"
+            )
+        else:
+            detail = f"read {lines} line(s)"
+            output_text = result.stdout
+    finally:
+        log_tool_event("head", status, params, detail)
 
-    if result.returncode != 0:
-        message = (
-            f"[elliot][tool head] command failed (returncode={result.returncode}). "
-            f"{result.stderr.strip() or 'Unknown error.'}"
-        )
-        print(message)
-        return message
-
-    print("[elliot][tool head] completed.")
-    return result.stdout
+    return output_text
 
 
 @function_tool
 def tail(path: str, lines: int = 50) -> str:
     """Return the last N lines from a file, similar to the Unix `tail` command."""
 
-    print(f"[elliot][tool tail] path={path!r}, lines={lines}")
+    params = {"path": path, "lines": lines}
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
+
     if not path:
-        message = "[elliot][tool tail] no path provided."
-        print(message)
-        return message
+        status = "error"
+        detail = "no path provided"
+        output_text = "[elliot][tool tail] no path provided."
+        log_tool_event("tail", status, params, detail)
+        return output_text
 
     if lines <= 0:
-        message = "[elliot][tool tail] number of lines must be positive."
-        print(message)
-        return message
+        status = "error"
+        detail = "non-positive line count"
+        output_text = "[elliot][tool tail] number of lines must be positive."
+        log_tool_event("tail", status, params, detail)
+        return output_text
 
     command = ["tail", "-n", str(lines), path]
 
@@ -235,41 +338,55 @@ def tail(path: str, lines: int = 50) -> str:
             env={**os.environ, "NO_COLOR": "1"},
         )
     except Exception as error:
-        message = f"[elliot][tool tail] unable to execute tail: {error}"
-        print(message)
-        return message
+        status = "error"
+        detail = f"unable to execute tail: {error}"
+        output_text = f"[elliot][tool tail] unable to execute tail: {error}"
+    else:
+        if result.returncode != 0:
+            status = "error"
+            detail = f"tail failed with return code `{result.returncode}`"
+            output_text = (
+                f"[elliot][tool tail] command failed (returncode={result.returncode}). "
+                f"{result.stderr.strip() or 'Unknown error.'}"
+            )
+        else:
+            detail = f"read {lines} line(s)"
+            output_text = result.stdout
+    finally:
+        log_tool_event("tail", status, params, detail)
 
-    if result.returncode != 0:
-        message = (
-            f"[elliot][tool tail] command failed (returncode={result.returncode}). "
-            f"{result.stderr.strip() or 'Unknown error.'}"
-        )
-        print(message)
-        return message
-
-    print("[elliot][tool tail] completed.")
-    return result.stdout
+    return output_text
 
 
 @function_tool
 def sed_write(path: str, command: str) -> str:
     """Run sed in-place against a file and return any command output."""
 
-    print(f"[elliot][tool sed_write] path={path!r}, command={command!r}")
+    params = {"path": path, "command": command}
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
+
     if not path:
-        message = "[elliot][tool sed_write] no path provided."
-        print(message)
-        return message
+        status = "error"
+        detail = "no path provided"
+        output_text = "[elliot][tool sed_write] no path provided."
+        log_tool_event("sed_write", status, params, detail)
+        return output_text
 
     if not command:
-        message = "[elliot][tool sed_write] no command provided."
-        print(message)
-        return message
+        status = "error"
+        detail = "no command provided"
+        output_text = "[elliot][tool sed_write] no command provided."
+        log_tool_event("sed_write", status, params, detail)
+        return output_text
 
     if not confirm_write_action("sed_write will edit the file in place using sed."):
-        message = "[elliot][tool sed_write] write permission denied."
-        print(message)
-        return message
+        status = "skipped"
+        detail = "write permission denied"
+        output_text = "[elliot][tool sed_write] write permission denied."
+        log_tool_event("sed_write", status, params, detail)
+        return output_text
 
     sed_command = ["sed", "-i", "", command, path]
 
@@ -281,29 +398,32 @@ def sed_write(path: str, command: str) -> str:
             env={**os.environ, "NO_COLOR": "1"},
         )
     except FileNotFoundError:
-        message = "[elliot][tool sed_write] 'sed' command not found."
-        print(message)
-        return message
+        status = "error"
+        detail = "'sed' command not found"
+        output_text = "[elliot][tool sed_write] 'sed' command not found."
     except Exception as error:
-        message = f"[elliot][tool sed_write] unable to execute sed: {error}"
-        print(message)
-        return message
+        status = "error"
+        detail = f"unable to execute sed: {error}"
+        output_text = f"[elliot][tool sed_write] unable to execute sed: {error}"
+    else:
+        if result.returncode != 0:
+            status = "error"
+            detail = f"sed failed with return code `{result.returncode}`"
+            output_text = (
+                f"[elliot][tool sed_write] command failed (returncode={result.returncode}). "
+                f"{result.stderr.strip() or 'Unknown error.'}"
+            )
+        else:
+            detail = "sed edit completed"
+            output = result.stdout.strip()
+            if output:
+                output_text = output
+            else:
+                output_text = "[elliot] sed in-place edit completed."
+    finally:
+        log_tool_event("sed_write", status, params, detail)
 
-    if result.returncode != 0:
-        message = (
-            f"[elliot][tool sed_write] command failed (returncode={result.returncode}). "
-            f"{result.stderr.strip() or 'Unknown error.'}"
-        )
-        print(message)
-        return message
-
-    output = result.stdout.strip()
-    if output:
-        print("[elliot][tool sed_write] completed with output.")
-        return output
-
-    print("[elliot][tool sed_write] completed.")
-    return "[elliot] sed in-place edit completed."
+    return output_text
 
 
 TOOLS = {
@@ -337,22 +457,47 @@ async def spawn_subagent(
         model=MODEL,
         tools=[TOOLS[tool] for tool in tools],
     )
-    print(
-        f"[elliot] spawning sub-agent '{name}' "
-        f"(tools: {', '.join(tools) or 'none'}; max_turns={max_turns})"
+    params = {
+        "name": name,
+        "tools": tools or [],
+        "max_turns": max_turns,
+    }
+    status = "success"
+    detail: Optional[str] = None
+    final_output = ""
+
+    tool_list = ", ".join(tools) if tools else "none"
+    log_markdown(
+        "\n".join(
+            [
+                f"**[elliot]** spawning sub-agent `{name}`",
+                f"tools: {tool_list}",
+                f"max_turns: {max_turns}",
+            ]
+        )
     )
 
-    result = await Runner.run(subagent, task, max_turns=max_turns)
+    try:
+        result = await Runner.run(subagent, task, max_turns=max_turns)
+        final_output = result.final_output
+        detail = "sub-agent completed successfully"
+    except Exception as error:
+        status = "error"
+        detail = f"sub-agent failed: {error}"
+        raise
+    finally:
+        log_tool_event("spawn_subagent", status, params, detail)
 
-    print(f"[elliot] sub-agent '{name}' completed.")
-    print(result.final_output)
+    if final_output:
+        console.print(Markdown(final_output))
 
-    return result.final_output
+    return final_output
 
 
 ELLIOT_INSTRUCTIONS = f"""You are Elliot, the orchestrator agent for a team of specialist coding agents.
 Your responsibilities:
 - Understand the user's goal, clarify missing information, and structure the work.
+- Gather the necessary context before proposing plans or delegating: inspect prior outputs, review relevant files, and run read-only commands when helpful.
 - Break the goal into concrete sub-tasks when it adds value. Keep tasks focused and deliverable-based.
 - For each sub-task, spawn a sub-agent with clear instructions, success criteria, relevant constraints, and only the tools the agent needs. The allowed tool names are: {TOOLS.keys()}.
 - Configure max_turns thoughtfully based on task complexity (default to 15 if unsure).
@@ -360,7 +505,7 @@ Your responsibilities:
 - Integrate sub-agent outputs into a cohesive final response that resolves the user's original request.
 - Escalate uncertainties back to the user instead of guessing.
 - Track dependencies between tasks and run them sequentially if required.
-- Be deliberate: outline your plan before executing, note what each subagent should produce, and summarize how their outputs combine in the final answer.
+- Be deliberate: summarize the relevant context you collected, outline your plan before executing, note what each subagent should produce, and explain how their outputs combine in the final answer.
 - Close with a concise summary of outcomes and next steps if they exist."""
 
 
@@ -415,7 +560,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         user_task = input("What should Elliot work on?").strip()
 
     final_output = run_elliot(user_task, max_turns=args.max_turns)
-    print(final_output)
+    log_markdown(final_output)
 
 
 if __name__ == "__main__":
