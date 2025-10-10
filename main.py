@@ -8,6 +8,27 @@ from agents import Agent, Runner, function_tool
 MODEL = "gpt-5"
 
 
+def confirm_write_action(description: str) -> bool:
+    """Prompt the user for permission before performing a write action."""
+
+    prompt = (
+        f"[elliot] {description}\n"
+        "Proceed? [y/N]: "
+    )
+    try:
+        response = input(prompt)
+    except EOFError:
+        print("[elliot] unable to prompt for confirmation (EOF). Denying by default.")
+        return False
+
+    allow = response.strip().lower() in {"y", "yes"}
+    if allow:
+        print("[elliot] permission granted.")
+    else:
+        print("[elliot] permission denied.")
+    return allow
+
+
 @function_tool
 def ast_grep_run_search(
     pattern: str, lang: str, paths: List[str], globs: List[str], context: int
@@ -79,6 +100,14 @@ def ast_grep_run_rewrite(
         f"pattern={pattern!r}, rewrite={rewrite!r}, "
         f"lang={lang or 'auto'}, paths={paths or ['.']}"
     )
+
+    if not confirm_write_action(
+        "ast_grep_run_rewrite will modify files in-place using ast-grep."
+    ):
+        message = "[elliot][tool ast_grep_run_rewrite] write permission denied."
+        print(message)
+        return message
+
     command = [
         "ast-grep",
         "run",
@@ -164,10 +193,6 @@ def head(path: str, lines: int = 50) -> str:
             text=True,
             env={**os.environ, "NO_COLOR": "1"},
         )
-    except FileNotFoundError:
-        message = "[elliot][tool head] 'head' command not found."
-        print(message)
-        return message
     except Exception as error:
         message = f"[elliot][tool head] unable to execute head: {error}"
         print(message)
@@ -209,10 +234,6 @@ def tail(path: str, lines: int = 50) -> str:
             text=True,
             env={**os.environ, "NO_COLOR": "1"},
         )
-    except FileNotFoundError:
-        message = "[elliot][tool tail] 'tail' command not found."
-        print(message)
-        return message
     except Exception as error:
         message = f"[elliot][tool tail] unable to execute tail: {error}"
         print(message)
@@ -230,12 +251,68 @@ def tail(path: str, lines: int = 50) -> str:
     return result.stdout
 
 
+@function_tool
+def sed_write(path: str, command: str) -> str:
+    """Run sed in-place against a file and return any command output."""
+
+    print(f"[elliot][tool sed_write] path={path!r}, command={command!r}")
+    if not path:
+        message = "[elliot][tool sed_write] no path provided."
+        print(message)
+        return message
+
+    if not command:
+        message = "[elliot][tool sed_write] no command provided."
+        print(message)
+        return message
+
+    if not confirm_write_action("sed_write will edit the file in place using sed."):
+        message = "[elliot][tool sed_write] write permission denied."
+        print(message)
+        return message
+
+    sed_command = ["sed", "-i", "", command, path]
+
+    try:
+        result = subprocess.run(
+            sed_command,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+    except FileNotFoundError:
+        message = "[elliot][tool sed_write] 'sed' command not found."
+        print(message)
+        return message
+    except Exception as error:
+        message = f"[elliot][tool sed_write] unable to execute sed: {error}"
+        print(message)
+        return message
+
+    if result.returncode != 0:
+        message = (
+            f"[elliot][tool sed_write] command failed (returncode={result.returncode}). "
+            f"{result.stderr.strip() or 'Unknown error.'}"
+        )
+        print(message)
+        return message
+
+    output = result.stdout.strip()
+    if output:
+        print("[elliot][tool sed_write] completed with output.")
+        return output
+
+    print("[elliot][tool sed_write] completed.")
+    return "[elliot] sed in-place edit completed."
+
+
 TOOLS = {
     "ast_grep_run_search": ast_grep_run_search,
     "ast_grep_run_rewrite": ast_grep_run_rewrite,
     "list_directory": list_directory,
     "tail": tail,
     "head": head,
+    "sed_write": sed_write,
 }
 
 
