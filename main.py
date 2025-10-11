@@ -1,19 +1,23 @@
 import argparse
 import difflib
 import os
-from os import environ
 import subprocess
 import tempfile
 import sys
 from itertools import count
 from typing import Any, Dict, List, Optional
 
-from agents import Agent, Runner, function_tool, set_tracing_disabled
+from agents import (
+    Agent,
+    Runner,
+    function_tool,
+    set_tracing_disabled,
+)
 from rich.console import Console
 from rich.markdown import Markdown
 
-MODEL = environ.get("MODEL_NAME", "gpt-5")
 set_tracing_disabled(True)
+MODEL = os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-5")
 
 console = Console()
 
@@ -122,6 +126,9 @@ def plan_manager(
         item_id: Numeric identifier for the plan item (required for update/remove).
         status: Item status ('pending', 'in_progress', 'completed', 'blocked').
         reason: Explanation captured on updates; required for updates.
+
+    Example:
+        plan_manager("add", title="Review repository structure")
     """
 
     params = {
@@ -239,6 +246,11 @@ def ast_grep_run_search(
         paths: Files or directories to search
         globs: Include/exclude file globs
         context: Number of lines of context to show around each match
+
+    Runs `ast-grep run --pattern ...` and streams both stdout/stderr back.
+
+    Example:
+        ast_grep_run_search("for $X in $ITER", "py", ["src"], [], 1)
     """
     params = {
         "pattern": pattern,
@@ -306,6 +318,11 @@ def ast_grep_run_rewrite(
         rewrite: Replacement template for the matched AST node
         lang: Language of the pattern (e.g., ts, py, rust, go)
         paths: Files or directories to apply the rewrite
+
+    Runs `ast-grep run --pattern ... --rewrite ... --update-all`.
+
+    Example:
+        ast_grep_run_rewrite("$X == None", "$X is None", "py", ["src"])
     """
 
     params = {
@@ -379,7 +396,13 @@ def ast_grep_run_rewrite(
 
 @function_tool
 def list_directory(path: str = ".", show_hidden: bool = False) -> str:
-    """List files and directories within a path."""
+    """List files and directories within a path.
+
+    Uses `os.listdir` and filters entries starting with '.' unless `show_hidden` is True.
+
+    Example:
+        list_directory("src", show_hidden=False)
+    """
 
     target_path = path or "."
     params = {"path": target_path, "show_hidden": show_hidden}
@@ -409,7 +432,13 @@ def list_directory(path: str = ".", show_hidden: bool = False) -> str:
 
 @function_tool
 def read_slice(path: str, start: int = 1, end: Optional[int] = None) -> str:
-    """Return a slice of a file using sed (inclusive start/end line numbers)."""
+    """Return a slice of a file using sed (inclusive start/end line numbers).
+
+    Invokes `sed -n {start},{end}p path` (or `$` for end-of-file) and returns stdout.
+
+    Example:
+        read_slice("README.md", start=1, end=20)
+    """
 
     params = {"path": path, "start": start, "end": end}
     status = "success"
@@ -467,7 +496,13 @@ def read_slice(path: str, start: int = 1, end: Optional[int] = None) -> str:
 
 @function_tool
 def tail(path: str, lines: int = 50) -> str:
-    """Return the last N lines from a file, similar to the Unix `tail` command."""
+    """Return the last N lines from a file, similar to the Unix `tail` command.
+
+    Executes `tail -n {lines} path` and returns stdout.
+
+    Example:
+        tail("logs/server.log", lines=100)
+    """
 
     params = {"path": path, "lines": lines}
     status = "success"
@@ -520,7 +555,13 @@ def tail(path: str, lines: int = 50) -> str:
 
 @function_tool
 def sed_write(path: str, command: str) -> str:
-    """Apply a sed command to a file with a diff preview and confirmation, then write changes atomically."""
+    """Apply a sed command to a file with a diff preview and confirmation, then write changes atomically.
+
+    Runs `sed {command} {path}`, previews a unified diff, and applies changes via a temp file.
+
+    Example:
+        sed_write("src/module.py", "s/OLD_VALUE/NEW_VALUE/g")
+    """
 
     if not path or not os.path.isfile(path):
         return "[elliot][sed_write] error: invalid path."
@@ -565,7 +606,13 @@ def sed_write(path: str, command: str) -> str:
 
 @function_tool
 def git_run(args: str, cwd: Optional[str] = None) -> str:
-    """Run git commands. Just specify the args after `git`."""
+    """Run git commands. Just specify the args after `git`.
+
+    Executes `git {args}` with capture of stdout/stderr.
+
+    Example:
+        git_run("status --short")
+    """
 
     params = {"args": args, "cwd": cwd}
     status = "success"
@@ -621,6 +668,11 @@ def python_run(code: str, cwd: Optional[str] = None) -> str:
     Args:
         code: Python source code to run with `python -c`.
         cwd: Working directory for the subprocess (optional).
+
+    Invokes `{python} -c "<code>"` using the same interpreter Elliot runs under.
+
+    Example:
+        python_run("import pathlib; print(list(pathlib.Path('.').iterdir()))")
     """
 
     params = {"code": code, "cwd": cwd}
@@ -636,8 +688,7 @@ def python_run(code: str, cwd: Optional[str] = None) -> str:
         return output_text
 
     if not confirm_write_action(
-        "python_run will execute the following Python code in a subprocess:\n"
-        f"{code}"
+        f"python_run will execute the following Python code in a subprocess:\n{code}"
     ):
         status = "skipped"
         detail = "execution denied"
@@ -672,15 +723,52 @@ def python_run(code: str, cwd: Optional[str] = None) -> str:
     return output_text
 
 
+@function_tool
+def ask_user(prompt: str, default: Optional[str] = None) -> str:
+    """Prompt the user for input via the terminal.
+
+    Example:
+        ask_user("Which database?", default="postgres")
+    """
+
+    params = {"prompt": prompt, "default": default}
+    status = "success"
+    detail: Optional[str] = None
+    response = ""
+    try:
+        if not prompt or not prompt.strip():
+            status = "error"
+            detail = "no prompt provided"
+            response = "[elliot][tool ask_user] no prompt provided."
+            return response
+        try:
+            answer = input(f"[elliot] {prompt}\nResponse: ")
+        except EOFError:
+            status = "error"
+            detail = "unable to prompt for input (EOF)"
+            response = "[elliot][tool ask_user] unable to prompt for input (EOF)."
+            return response
+        if answer.strip() == "" and default is not None:
+            response = default
+            detail = "used default response"
+        else:
+            response = answer
+            detail = "user provided response"
+    finally:
+        log_tool_event("ask_user", status, params, detail)
+
+    return response
+
 SUBAGENT_TOOLS = {
     "code_search": ast_grep_run_search,
     "code_rewrite": ast_grep_run_rewrite,
     "list_dir": list_directory,
     "file_tail": tail,
-    "file_slice": read_slice,
-    "sed_edit": sed_write,
+    "read_slice": read_slice,
+    "sed_inplace_edit": sed_write,
     "git_command": git_run,
     "python_run": python_run,
+    "ask_user": ask_user,
 }
 
 SUBAGENT_TOOL_NAMES = ", ".join(SUBAGENT_TOOLS.keys())

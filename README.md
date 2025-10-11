@@ -67,9 +67,10 @@ Built-in sub-agent tools:
 - code_rewrite — structural rewrite via ast-grep
 - list_dir — list directory contents
 - file_tail — show last N lines of a file
-- file_slice — read a file slice via sed
-- sed_edit — preview+apply sed-based edits with confirmation
+- read_slice — read a file slice via sed
+- sed_inplace_edit — preview+apply sed-based edits with confirmation
 - git_command — run git commands with confirmation
+- ask_user — prompt the human for input with an optional default
 
 ## Project structure
 - main.py — CLI entry point; orchestrator, tools, and agent setup
