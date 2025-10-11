@@ -1,13 +1,15 @@
 import argparse
+import difflib
 import os
 import subprocess
+import tempfile
 from typing import Any, Dict, List, Optional
 
 from agents import Agent, Runner, function_tool, set_tracing_disabled
 from rich.console import Console
 from rich.markdown import Markdown
 
-MODEL = "gpt-5"
+MODEL = "gpt-5-codex"
 set_tracing_disabled(True)
 
 console = Console()
@@ -360,70 +362,47 @@ def tail(path: str, lines: int = 50) -> str:
 
 @function_tool
 def sed_write(path: str, command: str) -> str:
-    """Run sed in-place against a file and return any command output."""
+    """Apply a sed command to a file with a diff preview and confirmation, then write changes atomically."""
 
-    params = {"path": path, "command": command}
-    status = "success"
-    detail: Optional[str] = None
-    output_text = ""
-
-    if not path:
-        status = "error"
-        detail = "no path provided"
-        output_text = "[elliot][tool sed_write] no path provided."
-        log_tool_event("sed_write", status, params, detail)
-        return output_text
+    if not path or not os.path.isfile(path):
+        return "[elliot][sed_write] error: invalid path."
 
     if not command:
-        status = "error"
-        detail = "no command provided"
-        output_text = "[elliot][tool sed_write] no command provided."
-        log_tool_event("sed_write", status, params, detail)
-        return output_text
+        return "[elliot][sed_write] error: no sed command provided."
 
-    if not confirm_write_action("sed_write will edit the file in place using sed."):
-        status = "skipped"
-        detail = "write permission denied"
-        output_text = "[elliot][tool sed_write] write permission denied."
-        log_tool_event("sed_write", status, params, detail)
-        return output_text
+    with open(path, encoding="utf-8") as f:
+        before = f.readlines()
 
-    sed_command = ["sed", "-i", "", command, path]
+    result = subprocess.run(
+        ["sed", command, path],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "NO_COLOR": "1"},
+    )
 
-    try:
-        result = subprocess.run(
-            sed_command,
-            capture_output=True,
-            text=True,
-            env={**os.environ, "NO_COLOR": "1"},
-        )
-    except FileNotFoundError:
-        status = "error"
-        detail = "'sed' command not found"
-        output_text = "[elliot][tool sed_write] 'sed' command not found."
-    except Exception as error:
-        status = "error"
-        detail = f"unable to execute sed: {error}"
-        output_text = f"[elliot][tool sed_write] unable to execute sed: {error}"
-    else:
-        if result.returncode != 0:
-            status = "error"
-            detail = f"sed failed with return code `{result.returncode}`"
-            output_text = (
-                f"[elliot][tool sed_write] command failed (returncode={result.returncode}). "
-                f"{result.stderr.strip() or 'Unknown error.'}"
-            )
-        else:
-            detail = "sed edit completed"
-            output = result.stdout.strip()
-            if output:
-                output_text = output
-            else:
-                output_text = "[elliot] sed in-place edit completed."
-    finally:
-        log_tool_event("sed_write", status, params, detail)
+    if result.returncode != 0:
+        return f"[elliot][sed_write] sed failed: {result.stderr.strip() or 'unknown error'}"
 
-    return output_text
+    after = result.stdout.splitlines(keepends=True)
+
+    diff = "".join(
+        difflib.unified_diff(before, after, fromfile=path, tofile=f"{path} (edited)")
+    )
+
+    if not diff.strip():
+        return "[elliot][sed_write] no changes detected."
+
+    print(diff)
+
+    if not confirm_write_action("Apply above diff?"):
+        return "[elliot][sed_write] edit cancelled."
+
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+        tmp.writelines(after)
+        tmp_path = tmp.name
+    os.replace(tmp_path, path)
+
+    return "[elliot][sed_write] edit applied successfully."
 
 
 @function_tool
