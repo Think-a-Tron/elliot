@@ -4,6 +4,7 @@ import os
 from os import environ
 import subprocess
 import tempfile
+import sys
 from itertools import count
 from typing import Any, Dict, List, Optional
 
@@ -613,6 +614,64 @@ def git_run(args: str, cwd: Optional[str] = None) -> str:
     return output_text
 
 
+@function_tool
+def python_run(code: str, cwd: Optional[str] = None) -> str:
+    """Execute Python code in a subprocess.
+
+    Args:
+        code: Python source code to run with `python -c`.
+        cwd: Working directory for the subprocess (optional).
+    """
+
+    params = {"code": code, "cwd": cwd}
+    status = "success"
+    detail: Optional[str] = None
+    output_text = ""
+
+    if not code:
+        status = "error"
+        detail = "no code provided"
+        output_text = "[elliot][tool python_run] no code provided."
+        log_tool_event("python_run", status, params, detail)
+        return output_text
+
+    if not confirm_write_action(
+        "python_run will execute the following Python code in a subprocess:\n"
+        f"{code}"
+    ):
+        status = "skipped"
+        detail = "execution denied"
+        output_text = "[elliot][tool python_run] execution denied."
+        log_tool_event("python_run", status, params, detail)
+        return output_text
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "NO_COLOR": "1"},
+        )
+        if result.returncode != 0:
+            status = "error"
+            detail = f"python exited with return code `{result.returncode}`"
+            output_text = result.stderr or (
+                f"[elliot][tool python_run] command failed (returncode={result.returncode})."
+            )
+        else:
+            detail = "python code executed successfully"
+            output_text = result.stdout
+    except Exception as error:
+        status = "error"
+        detail = f"failed to execute python: {error}"
+        output_text = f"[elliot][tool python_run] unable to execute: {error}"
+    finally:
+        log_tool_event("python_run", status, params, detail)
+
+    return output_text
+
+
 SUBAGENT_TOOLS = {
     "code_search": ast_grep_run_search,
     "code_rewrite": ast_grep_run_rewrite,
@@ -621,6 +680,7 @@ SUBAGENT_TOOLS = {
     "file_slice": read_slice,
     "sed_edit": sed_write,
     "git_command": git_run,
+    "python_run": python_run,
 }
 
 SUBAGENT_TOOL_NAMES = ", ".join(SUBAGENT_TOOLS.keys())
