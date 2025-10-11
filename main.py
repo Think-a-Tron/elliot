@@ -9,7 +9,7 @@ from agents import Agent, Runner, function_tool, set_tracing_disabled
 from rich.console import Console
 from rich.markdown import Markdown
 
-MODEL = "gpt-5-codex"
+MODEL = "gpt-5"
 set_tracing_disabled(True)
 
 console = Console()
@@ -255,10 +255,10 @@ def list_directory(path: str = ".", show_hidden: bool = False) -> str:
 
 
 @function_tool
-def head(path: str, lines: int = 50) -> str:
-    """Return the first N lines from a file, similar to the Unix `head` command."""
+def read_slice(path: str, start: int = 1, end: Optional[int] = None) -> str:
+    """Return a slice of a file using sed (inclusive start/end line numbers)."""
 
-    params = {"path": path, "lines": lines}
+    params = {"path": path, "start": start, "end": end}
     status = "success"
     detail: Optional[str] = None
     output_text = ""
@@ -266,18 +266,23 @@ def head(path: str, lines: int = 50) -> str:
     if not path:
         status = "error"
         detail = "no path provided"
-        output_text = "[elliot][tool head] no path provided."
-        log_tool_event("head", status, params, detail)
+        output_text = "[elliot][tool read_slice] no path provided."
+        log_tool_event("read_slice", status, params, detail)
         return output_text
 
-    if lines <= 0:
+    if start <= 0 or (end is not None and end < start):
         status = "error"
-        detail = "non-positive line count"
-        output_text = "[elliot][tool head] number of lines must be positive."
-        log_tool_event("head", status, params, detail)
+        detail = "invalid line range"
+        output_text = "[elliot][tool read_slice] invalid line range."
+        log_tool_event("read_slice", status, params, detail)
         return output_text
 
-    command = ["head", "-n", str(lines), path]
+    if end is not None:
+        range_spec = f"{start},{end}p"
+    else:
+        range_spec = f"{start},$p"
+
+    command = ["sed", "-n", range_spec, path]
 
     try:
         result = subprocess.run(
@@ -288,21 +293,21 @@ def head(path: str, lines: int = 50) -> str:
         )
     except Exception as error:
         status = "error"
-        detail = f"unable to execute head: {error}"
-        output_text = f"[elliot][tool head] unable to execute head: {error}"
+        detail = f"unable to execute sed: {error}"
+        output_text = f"[elliot][tool read_slice] unable to execute sed: {error}"
     else:
         if result.returncode != 0:
             status = "error"
-            detail = f"head failed with return code `{result.returncode}`"
+            detail = f"sed failed with return code `{result.returncode}`"
             output_text = (
-                f"[elliot][tool head] command failed (returncode={result.returncode}). "
+                f"[elliot][tool read_slice] command failed (returncode={result.returncode}). "
                 f"{result.stderr.strip() or 'Unknown error.'}"
             )
         else:
-            detail = f"read {lines} line(s)"
+            detail = "slice read successfully"
             output_text = result.stdout
     finally:
-        log_tool_event("head", status, params, detail)
+        log_tool_event("read_slice", status, params, detail)
 
     return output_text
 
@@ -461,7 +466,7 @@ TOOLS = {
     "ast_grep_run_rewrite": ast_grep_run_rewrite,
     "list_directory": list_directory,
     "tail": tail,
-    "head": head,
+    "read_slice": read_slice,
     "sed_write": sed_write,
     "git_run": git_run,
 }
