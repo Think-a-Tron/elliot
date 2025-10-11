@@ -3,6 +3,7 @@ import difflib
 import os
 import subprocess
 import tempfile
+from itertools import count
 from typing import Any, Dict, List, Optional
 
 from agents import Agent, Runner, function_tool, set_tracing_disabled
@@ -13,6 +14,15 @@ MODEL = "gpt-5"
 set_tracing_disabled(True)
 
 console = Console()
+
+PLAN_STATUS_MARKERS = {
+    "pending": "[ ]",
+    "in_progress": "[~]",
+    "completed": "[x]",
+    "blocked": "[!]",
+}
+CURRENT_PLAN: List[Dict[str, Any]] = []
+PLAN_ID_COUNTER = count(1)
 
 
 def _format_value(value: Any) -> str:
@@ -36,6 +46,26 @@ def log_markdown(message: str) -> None:
 
     console.print(Markdown(message))
     console.print()
+
+
+def _render_plan() -> None:
+    """Display the current plan using markdown checkboxes."""
+
+    if not CURRENT_PLAN:
+        log_markdown("**[elliot][plan]** *(plan is empty)*")
+        return
+
+    lines = ["**[elliot][plan]** current plan", ""]
+    for item in CURRENT_PLAN:
+        marker = PLAN_STATUS_MARKERS.get(item["status"], "[?]")
+        last_reason = item["history"][-1]["reason"] if item["history"] else ""
+        reason_suffix = f" — {last_reason}" if last_reason else ""
+        lines.append(
+            f"- {marker} **#{item['id']}** {item['title']} "
+            f"(`{item['status']}`){reason_suffix}"
+        )
+
+    log_markdown("\n".join(lines))
 
 
 def log_tool_event(
@@ -72,6 +102,127 @@ def confirm_write_action(description: str) -> bool:
     else:
         log_markdown("**[elliot]** permission denied.")
     return allow
+
+
+@function_tool
+def plan_manager(
+    action: str,
+    title: Optional[str] = None,
+    item_id: Optional[int] = None,
+    status: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> str:
+    """Manage Elliot's working plan. Supports CRUD operations with rich rendering.
+
+    Args:
+        action: One of 'reset', 'add', 'update', 'remove', 'show'.
+        title: Step description when creating or editing.
+        item_id: Numeric identifier for the plan item (required for update/remove).
+        status: Item status ('pending', 'in_progress', 'completed', 'blocked').
+        reason: Explanation captured on updates; required for updates.
+    """
+
+    params = {
+        "action": action,
+        "title": title,
+        "item_id": item_id,
+        "status": status,
+        "reason": reason,
+    }
+    outcome = "success"
+    detail: Optional[str] = None
+    response_message = ""
+
+    allowed_statuses = set(PLAN_STATUS_MARKERS.keys())
+
+    def _normalize_id(raw_id: Optional[int]) -> int:
+        if raw_id is None:
+            raise ValueError("item_id is required for this action")
+        if isinstance(raw_id, str):
+            if not raw_id.isdigit():
+                raise ValueError("item_id must be an integer")
+            return int(raw_id)
+        if isinstance(raw_id, int):
+            return raw_id
+
+    try:
+        normalized_action = (action or "").strip().lower()
+        if not normalized_action:
+            raise ValueError("action is required")
+
+        if status:
+            status_value = status.strip().lower()
+            if status_value not in allowed_statuses:
+                raise ValueError(
+                    f"invalid status '{status_value}'. "
+                    f"Valid options: {', '.join(sorted(allowed_statuses))}"
+                )
+        else:
+            status_value = None
+
+        if normalized_action == "reset":
+            CURRENT_PLAN.clear()
+            response_message = "plan cleared."
+        elif normalized_action == "add":
+            if not title:
+                raise ValueError("title is required to add a plan item")
+            new_id = next(PLAN_ID_COUNTER)
+            item = {
+                "id": new_id,
+                "title": title,
+                "status": status_value or "pending",
+                "history": [],
+            }
+            if reason:
+                item["history"].append(
+                    {"status": item["status"], "reason": reason.strip()}
+                )
+            CURRENT_PLAN.append(item)
+            response_message = f"added plan item #{new_id}."
+        elif normalized_action == "update":
+            target_id = _normalize_id(item_id)
+            if reason is None or not reason.strip():
+                raise ValueError("reason is required when updating a plan item")
+            for item in CURRENT_PLAN:
+                if item["id"] == target_id:
+                    if title:
+                        item["title"] = title
+                    if status_value:
+                        item["status"] = status_value
+                    item["history"].append(
+                        {"status": item["status"], "reason": reason.strip()}
+                    )
+                    break
+            else:
+                raise ValueError(f"plan item #{target_id} not found")
+            response_message = f"updated plan item #{target_id}."
+        elif normalized_action == "remove":
+            target_id = _normalize_id(item_id)
+            for index, existing in enumerate(CURRENT_PLAN):
+                if existing["id"] == target_id:
+                    CURRENT_PLAN.pop(index)
+                    response_message = f"removed plan item #{target_id}."
+                    break
+            else:
+                raise ValueError(f"plan item #{target_id} not found")
+        elif normalized_action == "show":
+            response_message = "displayed current plan."
+        else:
+            raise ValueError(
+                "invalid action. use one of: reset, add, update, remove, show."
+            )
+
+        _render_plan()
+        detail = response_message
+        response_message = f"[elliot][tool plan_manager] {response_message}"
+    except Exception as error:
+        outcome = "error"
+        detail = str(error)
+        response_message = f"[elliot][tool plan_manager] error: {error}"
+    finally:
+        log_tool_event("plan_manager", outcome, params, detail)
+
+    return response_message
 
 
 @function_tool
@@ -461,15 +612,17 @@ def git_run(args: str, cwd: Optional[str] = None) -> str:
     return output_text
 
 
-TOOLS = {
-    "ast_grep_run_search": ast_grep_run_search,
-    "ast_grep_run_rewrite": ast_grep_run_rewrite,
-    "list_directory": list_directory,
-    "tail": tail,
-    "read_slice": read_slice,
-    "sed_write": sed_write,
-    "git_run": git_run,
+SUBAGENT_TOOLS = {
+    "code_search": ast_grep_run_search,
+    "code_rewrite": ast_grep_run_rewrite,
+    "list_dir": list_directory,
+    "file_tail": tail,
+    "file_slice": read_slice,
+    "sed_edit": sed_write,
+    "git_command": git_run,
 }
+
+SUBAGENT_TOOL_NAMES = ", ".join(SUBAGENT_TOOLS.keys())
 
 
 @function_tool
@@ -479,19 +632,19 @@ async def spawn_subagent(
     """Spins up a focused helper agent with its own toolset, instructions, and turn budget.
     Include agent behavior, deliverables, additional context, etc. in the instructions."""
 
-    unknown_tools = [tool for tool in tools if tool not in TOOLS]
+    unknown_tools = [tool for tool in tools if tool not in SUBAGENT_TOOLS]
 
     if unknown_tools:
         raise ValueError(
             f"Unknown tool(s): {', '.join(unknown_tools)}. "
-            f"Available tools: {', '.join(sorted(TOOLS))}"
+            f"Available tools: {', '.join(sorted(SUBAGENT_TOOLS))}"
         )
 
     subagent = Agent(
         name=name,
         instructions=instructions,
         model=MODEL,
-        tools=[TOOLS[tool] for tool in tools],
+        tools=[SUBAGENT_TOOLS[tool] for tool in tools],
     )
     params = {
         "name": name,
@@ -533,15 +686,19 @@ async def spawn_subagent(
 ELLIOT_INSTRUCTIONS = f"""You are Elliot, the orchestrator agent for a team of specialist coding agents.
 Your responsibilities:
 - Understand the user's goal, clarify missing information, and structure the work.
-- Gather the necessary context before proposing plans or delegating: inspect prior outputs, review relevant files, and run read-only commands when helpful.
+- Gather the necessary context before proposing plans or delegating: inspect prior outputs, review relevant files, and run read-only commands when helpful. Note what you learned.
+- For any multi-step effort, draft a concise plan up front and keep it updated as sub-tasks complete.
+- Maintain that plan with the `plan_manager` tool: add, update (with reasons), remove, or show steps so progress stays transparent.
 - Break the goal into concrete sub-tasks when it adds value. Keep tasks focused and deliverable-based.
-- For each sub-task, spawn a sub-agent with clear instructions, success criteria, relevant constraints, and only the tools the agent needs. The allowed tool names are: {TOOLS.keys()}.
-- Configure max_turns thoughtfully based on task complexity (default to 15 if unsure).
+- For each sub-task, spawn a sub-agent with clear instructions, success criteria, relevant constraints, and only the tools the agent needs. The allowed tool names are: {SUBAGENT_TOOL_NAMES}.
+- Configure max_turns thoughtfully based on task complexity. Default to 30 top-level turns, increasing when the plan predicts longer work.
 - When a task is tiny or purely explanatory, you may answer directly without spawning a subagent.
+- Whenever practical, validate deliverables (e.g., run tests, lint, or dry-run tools). If validation is impossible, call out the gap explicitly.
 - Integrate sub-agent outputs into a cohesive final response that resolves the user's original request.
+- Highlight follow-up work, risks, or outstanding questions in the final response when they exist.
 - Escalate uncertainties back to the user instead of guessing.
 - Track dependencies between tasks and run them sequentially if required.
-- Be deliberate: summarize the relevant context you collected, outline your plan before executing, note what each subagent should produce, and explain how their outputs combine in the final answer.
+- Be deliberate: summarize the relevant context you collected, explain how each subagent's output fits the plan, and keep the narrative easy to follow.
 - Close with a concise summary of outcomes and next steps if they exist."""
 
 
@@ -552,7 +709,7 @@ def create_elliot_agent() -> Agent:
         name="Elliot",
         instructions=ELLIOT_INSTRUCTIONS,
         model=MODEL,
-        tools=[spawn_subagent],
+        tools=[plan_manager, spawn_subagent],
     )
 
 
@@ -579,8 +736,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=40,
-        help="Maximum turns for Elliot's top-level run (default: 40).",
+        default=30,
+        help="Maximum turns for Elliot's top-level run (default: 30).",
     )
     return parser.parse_args(argv)
 
