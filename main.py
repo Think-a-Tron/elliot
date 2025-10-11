@@ -1,6 +1,7 @@
 import argparse
 import difflib
 import os
+from os import environ
 import subprocess
 import tempfile
 from itertools import count
@@ -10,7 +11,7 @@ from agents import Agent, Runner, function_tool, set_tracing_disabled
 from rich.console import Console
 from rich.markdown import Markdown
 
-MODEL = "gpt-5"
+MODEL = environ.get("MODEL_NAME", "gpt-5")
 set_tracing_disabled(True)
 
 console = Console()
