@@ -1,113 +1,81 @@
 # Elliot — Orchestrator for Specialist Coding Agents
 
 ## Overview
-Elliot is a Python CLI that orchestrates specialist coding agents using the openai-agents library. It runs locally with rich Markdown console output, coordinates sub-agents for focused tasks, and exposes tools for structural code search/edits, filesystem inspection, and git operations. Elliot requires access to an OpenAI‑compatible API (OpenAI, or another provider via OPENAI_BASE_URL).
+Elliot is a Python package and CLI that orchestrates a team of specialist coding agents powered by [`openai-agents`](https://github.com/openai/openai-agents). It produces rich Markdown output in the terminal, builds and maintains project plans, and dispatches focused helper agents with a curated toolbelt for code search, editing, linting, git operations, and more.
 
-## Features
-- Orchestrator agent that plans work and delegates to sub-agents
-- Sub-agent toolset for code search, rewrites, file ops, and git
-- Model/provider agnostic via OPENAI_BASE_URL
-- Rich, readable Markdown logging in the terminal
-- Interactive safety confirmations before write/edit operations
-- Simple CLI workflow; no server to run
+Elliot targets Python 3.12+, runs entirely locally, and only requires network access to the OpenAI-compatible endpoint you configure.
 
-## Prerequisites
-- Python 3.12+
-- uv recommended for environment and dependency management
-- External utilities (used by some tools):
-  - ast-grep (installed via the ast-grep-cli Python wheel)
-  - sed and tail (for file slicing/edits)
-  - git (for repository operations)
+## Key Capabilities
+- **Collaborative planning** — maintains a live task plan and surfaces updates in-line.
+- **Sub-agent delegation** — spawns helper agents with scoped instructions and tools.
+- **Tooling safeguards** — confirms before performing write operations or running external commands.
+- **Markdown-first logs** — readable console output powered by `rich`.
+- **Extensible package layout** — core pieces live in the `elliot/` package (`agent`, `plan`, `tools`, `cli`, `output`) with a thin compatibility `main.py`.
 
-## Installation
+## Installation & Execution
 
-### Preferred: uv
-- Create and activate a virtual environment:
-  - uv venv
-- Install dependencies from pyproject.toml:
-  - uv sync
-- Run:
-  - uv run python main.py "your task here"
+### Quick one-off run (no checkout required)
+```bash
+uvx --from git+https://github.com/Think-a-Tron/elliot.git elliot "help me refactor foo.py"
+```
+`uvx` builds a temporary environment, runs Elliot, then cleans up.
 
-### Alternative: pip + venv
-- Create and activate a virtual environment:
-  - python -m venv .venv
-  - source .venv/bin/activate  (Windows: .venvScriptsactivate)
-- Install dependencies:
-  - pip install ast-grep-cli>=0.39.5 openai>=2.0.0 openai-agents>=0.1.0 rich>=14.2.0
-- Run:
-  - python main.py "your task here"
+### Install from Git
+```bash
+uv pip install git+https://github.com/Think-a-Tron/elliot.git
+uv run elliot "document the API"
+```
+You can swap `uv pip` for `pip install` or `pipx install` if you prefer other tooling.
+
+### Local development workflow
+```bash
+git clone https://github.com/Think-a-Tron/elliot.git
+cd elliot
+uv sync                       # create .venv and install deps
+uv run -- python -m elliot "hello there"
+# optional: expose console script inside venv
+uv pip install -e .
+uv run elliot "summarize the repo"
+```
+Stick with `uv run -- python -m elliot ...` if you do not want to install the package locally.
 
 ## Configuration
-Elliot reads configuration from environment variables:
-- OPENAI_API_KEY (required) — API key for an OpenAI‑compatible API.
-- OPENAI_BASE_URL (optional) — Base URL to target a non-OpenAI provider.
-- MODEL_NAME (optional) — Model to use; defaults to "gpt-5" in code.
+Set environment variables before invoking Elliot:
 
-Minimal .env.example:
-```
-# Required: set to your API key
-OPENAI_API_KEY=
+- `OPENAI_API_KEY` (required): API key for the OpenAI-compatible provider.
+- `OPENAI_BASE_URL` (optional): override to target a different host (e.g., Azure, local gateway).
+- `OPENAI_DEFAULT_MODEL` (optional): model identifier; defaults to `gpt-5`.
 
-# Optional: point to a compatible provider (e.g., x.ai, local gateway)
-# OPENAI_BASE_URL=https://api.your-provider.tld/v1
-
-# Optional: model name (default: gpt-5). Set to a model your provider supports.
-# MODEL_NAME=
+Example `.env` snippet:
+```bash
+export OPENAI_API_KEY="sk-***"
+# export OPENAI_BASE_URL="https://api.your-provider.tld/v1"
+# export OPENAI_DEFAULT_MODEL="gpt-4o"
 ```
 
-## Usage
-- Basic:
-  - python main.py "your task here" [--max-turns N]
-- If you omit the task, Elliot will prompt interactively in the terminal.
-- Elliot is a CLI, not a server.
+## CLI Usage
+```bash
+elliot "write release notes for v1.2"
+# or with module invocation:
+python -m elliot.cli --max-turns 40 "add async support"
+```
+If you omit the task argument, Elliot prompts for input interactively. Adjust `--max-turns` to cap the orchestrator’s conversation length.
 
-Built-in sub-agent tools:
-- code_search — structural search via ast-grep
-- code_rewrite — structural rewrite via ast-grep
-- list_dir — list directory contents
-- file_tail — show last N lines of a file
-- read_slice — read a file slice via sed
-- sed_inplace_edit — preview+apply sed-based edits with confirmation
-- git_command — run git commands with confirmation
-- ask_user — prompt the human for input with an optional default
+## Tool Reference
+Sub-agents can access a curated toolset:
 
-## Project structure
-- main.py — CLI entry point; orchestrator, tools, and agent setup
-- pyproject.toml — project metadata and dependencies
-- uv.lock — lockfile for uv
-- LICENSE — MIT License
-- README.md — this document
-- .python-version — pinned Python version for tooling
-- .gitignore — standard Git ignores
+- `code_search` — structural code search via `ast-grep`.
+- `code_rewrite` — structural rewrites with `ast-grep`.
+- `list_dir` — directory listings (with optional hidden files).
+- `file_tail` — the last *N* lines of a file.
+- `read_slice` — file slices via `sed`.
+- `sed_inplace_edit` — previewable `sed` edits (writes after confirmation).
+- `git_command` — `git` invocations with confirmation.
+- `python_run` — execute Python snippets in a subprocess.
+- `ruff_check` / `ruff_format` — lint or format using Ruff.
+- `ask_user` — request clarification from the human operator.
 
-## Testing & quality
-No tests or linters are configured yet. Consider adding:
-- pytest for unit tests
-- ruff/black for linting/formatting
-- pre-commit hooks to standardize checks
-
-## Security
-Important: a live API key is committed in env.sh.
-
-- File: env.sh
-- Variable: OPENAI_API_KEY
-
-Immediate remediation steps:
-1) Revoke/rotate the exposed API key in your provider dashboard now.
-2) Remove the file from version control:
-   - git rm --cached env.sh
-   - Add a proper .env.example (do not commit secrets).
-3) Add env.sh (and .env) to .gitignore to prevent future commits.
-4) If this repository is public or has been shared, rewrite history to purge the secret:
-   - Use git filter-repo (recommended) or the BFG Repo-Cleaner.
-   - Force-push only if necessary and after rotating the key.
-5) Audit usage logs with your provider to detect any misuse.
-
-Never commit real secrets. Use environment variables or a local .env file excluded from Git.
+Every tool logs inputs/outputs in Markdown and confirms before mutating files or running arbitrary commands.
 
 ## License
-MIT License. See LICENSE.
-
-## Acknowledgements/Notes
-- The default MODEL_NAME is "gpt-5", which may not exist on all providers. Set MODEL_NAME and (if needed) OPENAI_BASE_URL to match a supported model on your chosen provider.
+MIT License — see `LICENSE` for details.
