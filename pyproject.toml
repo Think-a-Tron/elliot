@@ -10,4 +10,15 @@ dependencies = [
     "openai>=2.0.0",
     "openai-agents>=0.1.0",
     "rich>=14.2.0",
+    "ruff>=0.14.0",
 ]
+
+[project.scripts]
+elliot = "elliot.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["elliot*"]
