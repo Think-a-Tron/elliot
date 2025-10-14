@@ -8,9 +8,10 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from agents import function_tool
+from openai import OpenAI
 
 from .output import log_markdown, log_tool_event
 
@@ -529,7 +530,9 @@ def ruff_check(targets: str, cwd: Optional[str] = None) -> str:
             )
         else:
             detail = "ruff check completed successfully"
-            output_text = combined_output or "[elliot][tool ruff_check] no issues found."
+            output_text = (
+                combined_output or "[elliot][tool ruff_check] no issues found."
+            )
     finally:
         log_tool_event("ruff_check", status, params, detail)
 
@@ -587,7 +590,9 @@ def ruff_format(targets: str, cwd: Optional[str] = None) -> str:
             )
         else:
             detail = "ruff format completed successfully"
-            output_text = combined_output or "[elliot][tool ruff_format] format complete."
+            output_text = (
+                combined_output or "[elliot][tool ruff_format] format complete."
+            )
     finally:
         log_tool_event("ruff_format", status, params, detail)
 
@@ -615,6 +620,50 @@ def ask_user(question: str) -> str:
     return response
 
 
+@function_tool
+def ask_expert(
+    question: str,
+    context: str = "",
+    system: str | None = None,
+) -> str:
+    """Proxy to the OpenAI Responses API to get design/implementation advice.
+    Returns a plain string.
+    """
+
+    # Determine model from environment with a sensible default.
+    model = os.environ.get("OPENAI_DEFAULT_MODEL", "gpt-5")
+
+    # Default system prompt if not provided.
+    if system is None:
+        system = (
+            "You are a senior software engineering mentor. Provide concise, "
+            "actionable guidance. Prefer minimal examples over verbose prose. "
+            "Call out trade-offs and risks."
+        )
+
+    # Compose the prompt, including context only when provided.
+    question_text = (question or "").strip()
+    context_text = (context or "").strip()
+    parts: list[str] = []
+    if context_text:
+        parts.append(f"Context:\n{context_text}")
+    parts.append(f"Question:\n{question_text}")
+    prompt = "\n\n".join(parts)
+
+    try:
+        client = OpenAI()
+
+        response = client.responses.create(
+            model=model,
+            input=prompt,
+            instructions=system,
+        )
+    except Exception as error:  # pragma: no cover - network/API defensive
+        return f"ERROR: {error}"
+
+    return response.output_text
+
+
 SUBAGENT_TOOLS = {
     "code_search": ast_grep_run_search,
     "code_rewrite": ast_grep_run_rewrite,
@@ -622,6 +671,7 @@ SUBAGENT_TOOLS = {
     "file_tail": tail,
     "read_slice": read_slice,
     "sed_inplace_edit": sed_write,
+    "ask_expert": ask_expert,
     "git_command": git_run,
     "python_run": python_run,
     "ruff_check": ruff_check,

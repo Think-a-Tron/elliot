@@ -74,6 +74,7 @@ Sub-agents can access a curated toolset:
 - `python_run` — execute Python snippets in a subprocess.
 - `ruff_check` / `ruff_format` — lint or format using Ruff.
 - `ask_user` — request clarification from the human operator.
+- `ask_expert` — get concise design/implementation guidance via the OpenAI Responses API.
 
 Every tool logs inputs/outputs in Markdown and confirms before mutating files or running arbitrary commands.
 
