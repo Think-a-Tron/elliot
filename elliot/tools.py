@@ -679,4 +679,14 @@ SUBAGENT_TOOLS = {
     "ask_user": ask_user,
 }
 
-SUBAGENT_TOOL_NAMES = ", ".join(SUBAGENT_TOOLS.keys())
+def _summarize_tool(name: str, tool) -> str:
+    description = getattr(tool, "description", "") or ""
+    summary = " ".join(description.split())
+    if summary:
+        return f"  - {name}: {summary}"
+    return f"  - {name}"
+
+
+SUBAGENT_TOOL_OVERVIEW = "\n".join(
+    _summarize_tool(name, tool) for name, tool in sorted(SUBAGENT_TOOLS.items())
+)
